@@ -397,10 +397,16 @@ export function installDeterministicCompaction(
 				const ctxTokens = estimateContextTokensNow(ctx);
 				recordTuningEvent(sessionId, parsed.target, old, parsed.value, ctxTokens, tuningTelemetry);
 				maybePersist(tuning, options.tuning, ctx);
+				// F-A label: the set value and the context readout are DIFFERENT
+				// scales — compact-after is a compactable-content token gate, while
+				// ctxTokens is the total context estimate (~100x larger). Tag each
+				// so tuning can't conflate them. Semantics unchanged; label only.
+				const gateUnit =
+					parsed.target === "compact-after" ? "compactable-content tokens" : "recent assistant msgs";
 				ctx.ui.notify(
-					`${parsed.target} ${old} -> ${parsed.value} (takes effect next turn). Context ~${
+					`${parsed.target} ${old} -> ${parsed.value} ${gateUnit} (takes effect next turn). Context now ~${
 						ctxTokens?.toLocaleString() ?? "?"
-					} tokens.`,
+					} total tokens.`,
 					"info",
 				);
 			},

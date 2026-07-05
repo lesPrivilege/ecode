@@ -178,10 +178,15 @@ export function formatStatus(report: CompactionProjectionReport): string {
 		gateLine = "  Gate: no threshold set (always active)";
 	} else {
 		const delta = report.rawTokens - threshold;
+		// F-A label: the gate compares report.rawTokens — the COMPACTABLE-content
+		// estimate (projection.ts), NOT total context tokens — against the
+		// threshold. `/compaction set` prints a total-context number on a ~100x
+		// larger scale; tag the scale here so the two are never conflated when
+		// tuning. Semantics unchanged; label only.
 		gateLine =
 			delta >= 0
-				? `  Gate: +${delta.toLocaleString()} tokens OVER threshold (${report.rawTokens.toLocaleString()} >= ${threshold.toLocaleString()}) -> ${report.triggerState}`
-				: `  Gate: ${Math.abs(delta).toLocaleString()} tokens UNDER threshold (${report.rawTokens.toLocaleString()} < ${threshold.toLocaleString()}) -> ${report.triggerState}`;
+				? `  Gate: +${delta.toLocaleString()} tokens OVER threshold (${report.rawTokens.toLocaleString()} >= ${threshold.toLocaleString()}, compactable-content estimate) -> ${report.triggerState}`
+				: `  Gate: ${Math.abs(delta).toLocaleString()} tokens UNDER threshold (${report.rawTokens.toLocaleString()} < ${threshold.toLocaleString()}, compactable-content estimate) -> ${report.triggerState}`;
 	}
 	return `${base}\n${gateLine}`;
 }
