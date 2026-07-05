@@ -53,3 +53,15 @@ triggered by contract ambiguity / stale-view exposure (as in (d)-1's render-cont
 check), not automatic on edits. Implication for the priority inversion: don't
 front-run the trust-protocol on *frequency* alone — it is a conditional (though
 costly-when-hit) pathology. Needs more samples across task types before a call.
+
+### cost-structure observation — `019f323d` (taucode read-analysis) — 2026-07-05
+
+Clean 32k natural crossing (**proj 4**) on a read-only analysis: **15 reads, 0
+re-reads**, but CH dropped 93%→**71.8%**. Compaction fired, the model never
+revisited compacted content (0 re-read cost), yet the 4 prefix rewrites broke the
+cache. So here the compaction cost is **cache-break, not re-read** — the mirror
+image of (d)-1 (re-read-dominated). The net-save cost structure is
+**task-conditional**: read-analysis pays cache-break; ambiguous edit pays re-reads.
+Mapping that distribution is exactly DF0's job. (Also: natural 32k crossing scales
+with session size — these focused loops barely cross, `proj 0–4`; the heavy
+crossings, `proj 91`+, came from big sessions.)
