@@ -112,7 +112,45 @@ export interface AmbientRowEnvelope {
 	[extra: string]: unknown;
 }
 
-export type AmbientRow = AmbientSessionRow | AmbientRowEnvelope;
+/**
+ * DF2 tuning-event row. Emitted (via {@link appendAmbientRow}) the moment a
+ * `/compaction set|on|off` command ACTUALLY changes live state — a no-op call
+ * (e.g. `on` when already on) writes nothing. This is the sample corpus for
+ * later runtime-policy automation, so the record — not a UI reprint — is what
+ * matters: it captures which knob moved, from what to what, and the estimated
+ * context-token count at that instant so a policy learner can correlate the
+ * manual tuning decision with the context pressure that prompted it.
+ *
+ * `type: "tuning"` is a sibling of {@link AmbientSessionRow}'s `type: "session"`
+ * in the SAME `schema_family` — the tolerant G1c/G2 reader skips row kinds whose
+ * numeric fields it doesn't recognise, so a stream that interleaves session and
+ * tuning rows still reduces cleanly to the session roll-up. It lands in the SAME
+ * per-session JSONL file (appended, never truncating the session summary).
+ */
+export interface AmbientTuningRow {
+	type: "tuning";
+	schema_family: string;
+	schema_version: number;
+	written_at: string;
+	session_id: string;
+	/**
+	 * Which knob changed. `keep-recent`/`compact-after` are the two `set` targets;
+	 * `enabled` is the `on`/`off` seam-A master switch.
+	 */
+	setting: "keep-recent" | "compact-after" | "enabled";
+	/** Value before the change (a number for the `set` knobs, a boolean for `enabled`). */
+	old_value: number | boolean;
+	/** Value after the change. */
+	new_value: number | boolean;
+	/**
+	 * Estimated context tokens at the moment of the change, via the SAME estimator
+	 * the extension's seam-A gate uses (pi's `estimateContextTokens` over the live
+	 * transcript). Null only if the transcript was unavailable when the command ran.
+	 */
+	context_tokens: number | null;
+}
+
+export type AmbientRow = AmbientSessionRow | AmbientTuningRow | AmbientRowEnvelope;
 
 export interface AppendAmbientRowOptions {
 	/**

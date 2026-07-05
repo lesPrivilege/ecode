@@ -45,9 +45,22 @@ import {
 import {
 	AmbientCollector,
 	appendAmbientRow,
+	AMBIENT_SCHEMA_FAMILY,
+	AMBIENT_SCHEMA_VERSION,
+	type AmbientTuningRow,
 	type AppendAmbientRowOptions,
 	type AssistantLike,
 } from "./ambient-telemetry.js";
+import {
+	estimateContextTokensNow,
+	parseTuningCommand,
+	persistTuning,
+	recordTuningEvent,
+	TuningState,
+	TUNING_COMPLETIONS,
+	type PersistOptions,
+	type TuningTelemetry,
+} from "./tuning.js";
 
 const DEFAULT_COMPACT_AFTER_INPUT_TOKENS = 32000;
 const DEFAULT_KEEP_RECENT_ASSISTANT_MSGS = 3;
@@ -104,6 +117,26 @@ export interface InstallOptions {
 	};
 	/** Register the observability commands + trigger-marker renderer. Default true. */
 	observability?: boolean;
+	/**
+	 * DF2 tuning-event logging + optional settings persistence. All optional.
+	 * Tuning rows are appended to the SAME ambient JSONL via DF1's writer; a test
+	 * may inject `write`/`writeOptions` to redirect them (mirrors `telemetry`).
+	 */
+	tuning?: {
+		/** Injected tuning-row writer (tests). Defaults to DF1's {@link appendAmbientRow}. */
+		write?: (row: AmbientTuningRow, opts?: AppendAmbientRowOptions) => string;
+		/** Override output dir / filename for tuning rows (tests). */
+		writeOptions?: AppendAmbientRowOptions;
+		/**
+		 * Enable best-effort persistence of tuning knobs to `<cwd>/.pi/settings.json`.
+		 * OFF by default (persistence is not read back by this extension and would
+		 * touch a real settings file, so it is strictly opt-in). When true, each
+		 * state-changing tuning command also writes the namespaced settings block.
+		 */
+		persist?: boolean;
+		/** Override the persistence target dir name (defaults to ".pi"). */
+		configDirName?: string;
+	};
 }
 
 /** Handle returned by the installer so tests can inspect/flush telemetry directly. */
@@ -116,6 +149,11 @@ export interface InstalledHandle {
 	isTelemetryEnabled: () => boolean;
 	/** Append the current cumulative ambient row now; returns the file path or undefined (disabled/no data). */
 	flushTelemetry: (sessionId: string) => string | undefined;
+	/**
+	 * DF2 live tuning state (seam-A on/off + keep-recent / compact-after). Mutates
+	 * when a `/compaction set|on|off` command runs; the seam-A hook reads through it.
+	 */
+	tuning: TuningState;
 }
 
 /** Read compacted READ-result paths out of a projection's diffs (for re-read tracking). */
@@ -146,6 +184,19 @@ export function installDeterministicCompaction(
 	options: InstallOptions = {},
 ): InstalledHandle {
 	const observabilityState: ObservabilityState = { config, turnCounter: 0 };
+
+	// --- DF2 tuning state -------------------------------------------------------
+	// A typed, mutable view over the SAME `config` object observabilityState holds,
+	// plus the on/off master switch. The seam-A hook below reads `tuning.isEnabled()`
+	// and the config fields live each turn, so a `/compaction set|on|off` takes
+	// effect on the very next `context` firing (and DF1's reports stay consistent).
+	const tuning = new TuningState(config);
+	const tuningTelemetry: TuningTelemetry = {
+		write: options.tuning?.write,
+		writeOptions: options.tuning?.writeOptions,
+		schemaFamily: AMBIENT_SCHEMA_FAMILY,
+		schemaVersion: AMBIENT_SCHEMA_VERSION,
+	};
 
 	// --- Ambient telemetry state ------------------------------------------------
 	const telemetry = new AmbientCollector();
@@ -185,6 +236,19 @@ export function installDeterministicCompaction(
 	pi.on("context", (event) => {
 		observabilityState.turnCounter += 1;
 		const turn = observabilityState.turnCounter;
+
+		// DF2 negative-zone escape hatch: `/compaction off` disables seam-A entirely
+		// for this session. Pass messages through UNCHANGED — byte-identical to never
+		// having installed the hook — but still tally ambient telemetry (raw tokens,
+		// not projected) so the record reflects that this turn was NOT compacted.
+		if (!tuning.isEnabled()) {
+			if (telemetryEnabled) {
+				const rawTokens = estimateAgentTokens(event.messages as AgentMessage[]);
+				telemetry.onTurn(rawTokens, false, []);
+			}
+			return;
+		}
+
 		const outcome = projectContext(event.messages as AgentMessage[], config);
 
 		// Ambient: record the OUTGOING payload's estimated tokens (post-projection
@@ -257,25 +321,88 @@ export function installDeterministicCompaction(
 			pi.registerEntryRenderer(OBSERVABILITY_TRIGGER_TYPE, makeTriggerRenderer({ Box, Text }));
 		}
 
-		// Fourth command: toggle ambient telemetry off for the rest of the session.
+		// The single `/compaction` command. DF1 owns `telemetry on|off`; DF2 adds
+		// `on|off` (seam-A master switch) and `set keep-recent=N` / `set compact-after=N`.
+		// Parsing order is deliberate: DF1's `telemetry …` is matched FIRST by exact
+		// string, THEN we hand off to parseTuningCommand (which only ever accepts bare
+		// `on`/`off`/`set …`), so `/compaction off` (seam-A) and `/compaction telemetry
+		// off` (telemetry) can never be confused in either direction.
 		pi.registerCommand("compaction", {
-			description: "Compaction extension controls (e.g. `telemetry off`)",
+			description: "Compaction controls: on|off, set keep-recent=N, set compact-after=N, telemetry on|off",
 			getArgumentCompletions: (prefix: string) => {
-				const opts = ["telemetry off", "telemetry on"];
+				const opts = ["telemetry off", "telemetry on", ...TUNING_COMPLETIONS];
 				const hits = opts.filter((o) => o.startsWith(prefix));
 				return hits.length > 0 ? hits.map((o) => ({ value: o, label: o })) : null;
 			},
 			handler: async (args, ctx) => {
 				const arg = args.trim().toLowerCase();
+
+				// --- DF1: ambient telemetry toggle (exact match, checked first). ---
 				if (arg === "telemetry off") {
 					telemetryEnabled = false;
 					ctx.ui.notify("Ambient telemetry disabled for this session.", "info");
-				} else if (arg === "telemetry on") {
+					return;
+				}
+				if (arg === "telemetry on") {
 					telemetryEnabled = true;
 					ctx.ui.notify("Ambient telemetry enabled for this session.", "info");
-				} else {
-					ctx.ui.notify("Usage: /compaction telemetry off | telemetry on", "warning");
+					return;
 				}
+
+				// --- DF2: seam-A on/off + set keep-recent / compact-after. ---
+				const parsed = parseTuningCommand(arg);
+				if (parsed === null) {
+					ctx.ui.notify(
+						"Usage: /compaction on | off | set keep-recent=N | set compact-after=N | telemetry on|off",
+						"warning",
+					);
+					return;
+				}
+				if (parsed.kind === "set-error") {
+					ctx.ui.notify(parsed.message, "warning");
+					return;
+				}
+
+				const sessionId = ctx.sessionManager.getSessionId();
+
+				if (parsed.kind === "toggle") {
+					const old = tuning.isEnabled();
+					const changed = tuning.setEnabled(parsed.enabled);
+					if (!changed) {
+						ctx.ui.notify(`Compaction already ${parsed.enabled ? "on" : "off"}.`, "info");
+						return;
+					}
+					// Estimate context tokens at the moment of the change (same estimator
+					// as the seam-A gate) and record exactly one tuning row.
+					const ctxTokens = estimateContextTokensNow(ctx);
+					recordTuningEvent(sessionId, "enabled", old, parsed.enabled, ctxTokens, tuningTelemetry);
+					maybePersist(tuning, options.tuning, ctx);
+					ctx.ui.notify(
+						parsed.enabled
+							? "Compaction ON — seam-A projection active next turn."
+							: "Compaction OFF — messages pass through unprojected next turn.",
+						"info",
+					);
+					return;
+				}
+
+				// parsed.kind === "set"
+				const old = parsed.target === "keep-recent" ? tuning.getKeepRecent() : tuning.getCompactAfter();
+				const changed =
+					parsed.target === "keep-recent" ? tuning.setKeepRecent(parsed.value) : tuning.setCompactAfter(parsed.value);
+				if (!changed) {
+					ctx.ui.notify(`${parsed.target} already ${parsed.value}; no change.`, "info");
+					return;
+				}
+				const ctxTokens = estimateContextTokensNow(ctx);
+				recordTuningEvent(sessionId, parsed.target, old, parsed.value, ctxTokens, tuningTelemetry);
+				maybePersist(tuning, options.tuning, ctx);
+				ctx.ui.notify(
+					`${parsed.target} ${old} -> ${parsed.value} (takes effect next turn). Context ~${
+						ctxTokens?.toLocaleString() ?? "?"
+					} tokens.`,
+					"info",
+				);
 			},
 		});
 	}
@@ -300,7 +427,22 @@ export function installDeterministicCompaction(
 		telemetry,
 		isTelemetryEnabled: () => telemetryEnabled,
 		flushTelemetry,
+		tuning,
 	};
+}
+
+/**
+ * Best-effort settings persistence for a tuning change. No-op unless
+ * `options.tuning.persist` is true (persistence is opt-in — it touches a real
+ * `.pi/settings.json` and is not read back by this extension). Resolves the
+ * project cwd from the command context. Never throws into the command path.
+ */
+function maybePersist(tuning: TuningState, tuningOpts: InstallOptions["tuning"], ctx: ExtensionContext): void {
+	if (!tuningOpts?.persist) return;
+	const cwd = ctx.sessionManager.getCwd();
+	if (!cwd) return;
+	const persistOpts: PersistOptions = { cwd, configDirName: tuningOpts.configDirName };
+	persistTuning(tuning, persistOpts);
 }
 
 const factory = (pi: ExtensionAPI): void => {
