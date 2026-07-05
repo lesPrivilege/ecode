@@ -30,6 +30,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { Box, Text } from "@earendil-works/pi-tui";
+import { gateStatus, registerGateWidget } from "./gate-widget.js";
 import type { CompactionOptions } from "./compaction-core.js";
 import { estimateAgentTokens, projectContext, type ProjectionConfig } from "./projection.js";
 import { buildSeamBCheckpoint, type SeamBInput } from "./seam-b.js";
@@ -65,31 +66,6 @@ import {
 const DEFAULT_COMPACT_AFTER_INPUT_TOKENS = 32000;
 const DEFAULT_KEEP_RECENT_ASSISTANT_MSGS = 3;
 
-// ---- live gate line (shared between seam-A hook and widget) ----------------
-
-/**
- * Latest gate status read by the widget component on each render.
- * Updated every turn inside the seam-A context hook.
- */
-interface GateStatus {
-	rawTokens: number | null;
-	threshold: number;
-	triggerState: "waiting" | "active" | "off" | "no_data";
-	/** tokensSaved from the most recent compacting projection; null until first real trigger. */
-	lastSavedTokens: number | null;
-	/** effectiveSavedPct from the most recent compacting projection; null until first real trigger. */
-	lastSavedPct: number | null;
-}
-
-const gateStatus: GateStatus = {
-	rawTokens: null,
-	threshold: DEFAULT_COMPACT_AFTER_INPUT_TOKENS,
-	triggerState: "no_data",
-	lastSavedTokens: null,
-	lastSavedPct: null,
-};
-
-let gateWidgetRegistered = false;
 
 function readNumberEnv(name: string, fallback: number): number {
 	const raw = process.env[name];
@@ -270,28 +246,8 @@ export function installDeterministicCompaction(
 		const turn = observabilityState.turnCounter;
 
 		// Register the gate widget on first TUI-capable context event.
-		if (!gateWidgetRegistered && ctx.hasUI && typeof ctx.ui.setWidget === "function") {
-			ctx.ui.setWidget(
-				"compaction-gate",
-				(_tui, _theme) => ({
-					render(_width: number): string[] {
-						const { rawTokens, threshold, triggerState } = gateStatus;
-						if (rawTokens === null || triggerState === "no_data") {
-							return ["⟨compaction⟩ gate — / — compactable · —"];
-						}
-						const fmt = (n: number): string => n.toLocaleString();
-						let line = `⟨compaction⟩ gate ${fmt(rawTokens)} / ${fmt(threshold)} compactable · ${triggerState}`;
-						if (gateStatus.lastSavedTokens !== null) {
-							line += ` · last −${fmt(gateStatus.lastSavedTokens)} (${gateStatus.lastSavedPct}%)`;
-						}
-						return [line];
-					},
-					get height(): number {
-						return 1;
-					},
-				}),
-			);
-			gateWidgetRegistered = true;
+		if (typeof ctx.ui.setWidget === "function") {
+			registerGateWidget(ctx.ui);
 		}
 
 		// DF2 negative-zone escape hatch: `/compaction off` disables seam-A entirely
