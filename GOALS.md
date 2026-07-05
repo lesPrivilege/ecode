@@ -85,6 +85,36 @@ provider cache hit/miss（survey Item 5 确认：DeepSeek `prompt_cache_hit_toke
 **验收**：四臂各跑一个冒烟 packet，报告可比对；sweep 参数化（4k/16k/32k/64k）。
 **禁区**：不自造 task packets 内容（G2 人定）；不下质量结论。
 
+## G1d · packet-loader 与 workspace 快照桥接（依赖 G1c；阻塞 G2 全部六个 packet）
+
+背景：G1c 复核发现两个 harness 缺口（见 `docs/g2-task-packets.md` 人侧输入清单）。
+架构裁定（人定，终稿）：**快照构建外置，per-arm 复制内置**。
+
+**任务**：
+1. `experiments/lib/packet.ts`：解析 taucode packet 格式（Goal / Read first /
+   Allowed / Non-goals / Validation / Acceptance）→ `Scenario`。prompt 生成语义
+   对齐 `../taucode/scripts/dogfood-task.mjs` 的 `prompt --packet`（先读它，
+   不重造转换规则）。六个 G2 packet（`docs/g2-task-packets.md`）全部可加载。
+2. acceptance 静态检查（file-exists / contains / not-contains / regex / not-regex）
+   在 run 结束后自动执行，逐条结果写入该 run 的 JSONL（`accept: [{check, pass}]`）；
+   `command:` 类不自动执行，原样记录为 `pending`（allowlist 纪律，人工/compare 层处理）。
+3. `experiments/prepare-snapshot.ts`：构建 packet-class 快照（复制 `../taucode`
+   去 `.git`/`results`/`node_modules` → `npm install` → 记录内容 manifest hash），
+   输出到 `experiments/snapshots/<name>/`。贵操作，per-packet-class 一次。
+4. `run.ts` 新增 `--workspace-from <snapshot-dir>`：把快照廉价复制为本 run 工作目录，
+   并在 JSONL 里自记 `workspace: {source, manifestHash}`——「四臂起点字节一致」
+   变成可核验字段而非协议承诺。缺省行为（tmpdir + seedFiles）保持不变。
+5. 实证确认 pi read 工具对 cwd 外绝对路径的行为（E1/E2 依赖读 `pi/` 源码），
+   结论以 file:line 补进 `docs/g0-survey.md` Item 7；若受限，给出 E packet 的
+   最小落法（symlink 或调整 cwd），不改 pi。
+
+**产出**：上述两个新文件 + run.ts/JSONL schema 增量 + survey Item 7。
+**验收**：六个 G2 packet 逐个 `packet.ts` 加载成功且 prompt 与 dogfood-task.mjs
+语义一致（抽查对比）；mock provider 下用快照 workspace 跑通一个 R 类冒烟，
+JSONL 含 workspace hash 与 accept 字段；两臂同快照的工作目录 diff 为空。
+**禁区**：不改 G2 packet 内容；不动 pi；不动 compaction-core 算法；
+不自动执行 `command:` 检查。
+
 ## G2 · 执行轮（人分发，不进本轮 coding）
 
 task packets：refactor / exploration / **direct-transformation（负区间必跑臂）**
