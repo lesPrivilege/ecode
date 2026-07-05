@@ -37,7 +37,7 @@ import type {
 	RegisteredCommand,
 } from "@earendil-works/pi-coding-agent";
 import { installDeterministicCompaction } from "../src/extension.js";
-import { OBSERVABILITY_TRIGGER_TYPE } from "../src/observability.js";
+import { OBSERVABILITY_TRIGGER_TYPE, formatTriggerMarkerLine } from "../src/observability.js";
 import { createMockProvider, text, toolCall, type ScriptedStep } from "../src/mock-provider.js";
 
 const PROVIDER = "mockobs";
@@ -202,7 +202,7 @@ describe("DF1 observability commands (mock provider, no API key)", () => {
 	it("registers exactly the four DF1 commands", async () => {
 		harness = await buildHarness(0);
 		const names = [...harness.commands.keys()].sort();
-		expect(names).toEqual(["compact-diff", "compact-report", "compact-status", "compaction"]);
+		expect(names).toEqual(["compact-dash", "compact-diff", "compact-report", "compact-status", "compaction"]);
 	});
 
 	it("compact-status reports an ACTIVE gate and raw>compacted once the threshold is crossed", async () => {
@@ -308,4 +308,89 @@ describe("DF1 trigger marker presence/absence (mock provider, no API key)", () =
 		expect(triggerEntries(harness).length).toBe(0);
 		expect(harness.appendedEntries.filter((e) => e.customType === OBSERVABILITY_TRIGGER_TYPE).length).toBe(0);
 	}, 60000);
+});
+
+// --- S2: formatTriggerMarkerLine pure-function test (gap found in post-compaction audit) ---
+
+describe("formatTriggerMarkerLine (S2)", () => {
+	it("includes turn, replacement count, saved tokens, and gate position", () => {
+		const line = formatTriggerMarkerLine({
+			turn: 7,
+			compactedCount: 3,
+			effectiveTokensSaved: 4200,
+			rawTokens: 35000,
+			compactAfterInputTokens: 32000,
+		});
+		expect(line).toContain("turn 7");
+		expect(line).toContain("3 replacement(s)");
+		expect(line).toContain("4,200 tokens saved");
+		expect(line).toContain("35,000");
+		expect(line).toContain("32,000");
+	});
+
+	it("uses compactable-scale gate numbers, not context total", () => {
+		const line = formatTriggerMarkerLine({
+			turn: 1,
+			compactedCount: 1,
+			effectiveTokensSaved: 100,
+			rawTokens: 500,
+			compactAfterInputTokens: 400,
+		});
+		expect(line).toContain("gate 500/400");
+	});
+});
+
+// --- S5: formatDash pure-function tests ---
+
+import { formatDash } from "../src/observability.js";
+
+describe("formatDash (S5)", () => {
+	const baseGate = { rawTokens: 12000, threshold: 32000, triggerState: "waiting", keepRecent: 3 };
+	const baseDash = { triggerCount: 0, totalSavedTokens: 0, hintCount: 0, trustProtocolEnabled: false };
+
+	it("shows all four sections with data", () => {
+		const text = formatDash(
+			{ ...baseGate, triggerState: "active" },
+			{ triggerCount: 2, totalSavedTokens: 5000, hintCount: 0, trustProtocolEnabled: false },
+			[{ turn: 1, ratio: 0.95 }, { turn: 2, ratio: 0.30 }, { turn: 3, ratio: 0.90 }],
+		);
+		expect(text).toContain("Gate:");
+		expect(text).toContain("compactable");
+		expect(text).toContain("keep=3");
+		expect(text).toContain("Triggers: 2×");
+		expect(text).toContain("5,000 tokens saved");
+		expect(text).toContain("CH:");
+		expect(text).toContain("3 turns");
+		expect(text).not.toContain("Trust hints");
+	});
+
+	it("shows trust hint line only when flag-on", () => {
+		const text = formatDash(baseGate, { ...baseDash, trustProtocolEnabled: true, hintCount: 3 }, []);
+		expect(text).toContain("Trust hints: 3 stale-view fired");
+	});
+
+	it("omits trust line when flag-off", () => {
+		const text = formatDash(baseGate, baseDash, []);
+		expect(text).not.toContain("Trust hints");
+	});
+
+	it("handles no-data gate state", () => {
+		const text = formatDash(
+			{ rawTokens: null, threshold: 32000, triggerState: "no_data", keepRecent: null },
+			baseDash,
+			[],
+		);
+		expect(text).toContain("Gate: — / — compactable · —");
+		expect(text).toContain("Triggers: none yet");
+		expect(text).toContain("CH: no data");
+	});
+
+	it("labels saved tokens as compactable", () => {
+		const text = formatDash(
+			baseGate,
+			{ triggerCount: 1, totalSavedTokens: 1000, hintCount: 0, trustProtocolEnabled: false },
+			[],
+		);
+		expect(text).toContain("(compactable)");
+	});
 });

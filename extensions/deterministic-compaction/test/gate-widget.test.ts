@@ -16,6 +16,7 @@ beforeEach(() => {
 	gateStatus.triggerState = "no_data";
 	gateStatus.lastSavedTokens = null;
 	gateStatus.lastSavedPct = null;
+	gateStatus.keepRecent = null;
 });
 
 describe("gate widget render", () => {
@@ -71,6 +72,37 @@ describe("gate widget render", () => {
 		gateStatus.triggerState = "off";
 		const lines = renderGateWidget(80);
 		expect(lines).toEqual(["⟨compaction⟩ gate 999 / 500 compactable · off"]);
+	});
+
+	it("echoes keep-recent param when set", () => {
+		gateStatus.rawTokens = 500;
+		gateStatus.threshold = 999;
+		gateStatus.triggerState = "waiting";
+		gateStatus.keepRecent = 3;
+		const lines = renderGateWidget(80);
+		expect(lines).toEqual(["⟨compaction⟩ gate 500 / 999 compactable · waiting · keep=3"]);
+	});
+
+	it("omits keep-recent when null (pre-first-hook)", () => {
+		gateStatus.rawTokens = 500;
+		gateStatus.threshold = 999;
+		gateStatus.triggerState = "waiting";
+		gateStatus.keepRecent = null;
+		const lines = renderGateWidget(80);
+		expect(lines).toEqual(["⟨compaction⟩ gate 500 / 999 compactable · waiting"]);
+	});
+
+	it("shows both savings and keep-recent together", () => {
+		gateStatus.rawTokens = 999;
+		gateStatus.threshold = 500;
+		gateStatus.triggerState = "active";
+		gateStatus.lastSavedTokens = 123;
+		gateStatus.lastSavedPct = 12;
+		gateStatus.keepRecent = 5;
+		const lines = renderGateWidget(80);
+		expect(lines).toEqual([
+			"⟨compaction⟩ gate 999 / 500 compactable · active · last −123 (12%) · keep=5",
+		]);
 	});
 
 	it("uses toLocaleString for thousand-separator formatting", () => {

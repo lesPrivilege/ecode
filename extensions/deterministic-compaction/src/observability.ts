@@ -294,6 +294,67 @@ export function emitTriggerMarker(pi: ExtensionAPI, data: TriggerMarkerData): vo
  * registered by extension.ts (which owns the pi-tui import); the commands here
  * only need `pi.sendMessage` + `ctx.sessionManager`, both always available.
  */
+// ---- S5: /compact-dash summary view -----------------------------------------
+
+export interface DashState {
+	triggerCount: number;
+	totalSavedTokens: number;
+	hintCount: number;
+	trustProtocolEnabled: boolean;
+}
+
+export function formatDash(
+	gate: { rawTokens: number | null; threshold: number; triggerState: string; keepRecent: number | null },
+	dash: DashState,
+	chSamples: readonly { turn: number; ratio: number | null }[],
+): string {
+	const fmt = (n: number): string => n.toLocaleString();
+	const lines: string[] = [];
+
+	// Gate status
+	if (gate.rawTokens === null) {
+		lines.push("Gate: — / — compactable · —");
+	} else {
+		let gateLine = `Gate: ${fmt(gate.rawTokens)} / ${fmt(gate.threshold)} compactable · ${gate.triggerState}`;
+		if (gate.keepRecent !== null) gateLine += ` · keep=${gate.keepRecent}`;
+		lines.push(gateLine);
+	}
+
+	// Trigger summary
+	if (dash.triggerCount === 0) {
+		lines.push("Triggers: none yet");
+	} else {
+		lines.push(`Triggers: ${dash.triggerCount}× · ~${fmt(dash.totalSavedTokens)} tokens saved (compactable)`);
+	}
+
+	// CH trace
+	if (chSamples.length === 0) {
+		lines.push("CH: no data");
+	} else {
+		const SPARK = "▁▂▃▄▅▆▇█";
+		let bar = "";
+		let lastRatio: number | null = null;
+		for (const s of chSamples) {
+			if (s.ratio === null) {
+				bar += "·";
+			} else {
+				const idx = Math.min(Math.round(s.ratio * (SPARK.length - 1)), SPARK.length - 1);
+				bar += SPARK[idx];
+				lastRatio = s.ratio;
+			}
+		}
+		const pct = lastRatio !== null ? ` ${Math.round(lastRatio * 100)}%` : "";
+		lines.push(`CH: ${bar}${pct} (${chSamples.length} turns)`);
+	}
+
+	// Trust hints (only when flag-on)
+	if (dash.trustProtocolEnabled) {
+		lines.push(`Trust hints: ${dash.hintCount} stale-view fired`);
+	}
+
+	return lines.join("\n");
+}
+
 export function registerObservabilityCommands(pi: ExtensionAPI, state: ObservabilityState): void {
 	pi.registerCommand("compact-status", {
 		description: "Show deterministic-compaction trigger state and token gate position",

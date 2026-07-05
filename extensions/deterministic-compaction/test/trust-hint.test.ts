@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { staleViewHints, staleHintMessage } from "../src/trust-hint.ts";
+import { staleViewHints, staleHintMessage, renderHintIndicator } from "../src/trust-hint.ts";
 import { TrustLedger, hashContent } from "../src/trust-ledger.ts";
 import type { Message } from "../src/compaction-core.js";
 
@@ -84,5 +84,32 @@ describe("staleHintMessage — T3 volatile tail (prefix stability)", () => {
 	it("joins multiple hints into one tail block", () => {
 		const msg = staleHintMessage(["a", "b"]);
 		expect(msg).toEqual({ role: "user", content: "a\nb", timestamp: 0 });
+	});
+});
+
+describe("renderHintIndicator (S4)", () => {
+	it("returns empty when no hints", () => {
+		expect(renderHintIndicator({ turn: 5, hints: [] })).toEqual([]);
+	});
+
+	it("renders a single hint with path and hashes", () => {
+		const hint = "[stale-view] src/app.ts: view from abcd1234 predates your edit at turn 3 (now ef567890); re-read only if you need current content.";
+		const lines = renderHintIndicator({ turn: 3, hints: [hint] });
+		expect(lines.length).toBe(1);
+		expect(lines[0]).toContain("⟨trust⟩");
+		expect(lines[0]).toContain("turn 3");
+		expect(lines[0]).toContain("src/app.ts");
+		expect(lines[0]).toContain("abcd1234→ef567890");
+	});
+
+	it("renders multiple hints on one line", () => {
+		const hints = [
+			"[stale-view] a.ts: view from 11111111 predates your edit at turn 2 (now 22222222); re-read only if you need current content.",
+			"[stale-view] b.ts: view from 33333333 predates your edit at turn 2 (now 44444444); re-read only if you need current content.",
+		];
+		const lines = renderHintIndicator({ turn: 2, hints });
+		expect(lines.length).toBe(1);
+		expect(lines[0]).toContain("a.ts 11111111→22222222");
+		expect(lines[0]).toContain("b.ts 33333333→44444444");
 	});
 });

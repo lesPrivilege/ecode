@@ -22,6 +22,8 @@ export interface GateStatus {
 	lastSavedTokens: number | null;
 	/** effectiveSavedPct from the most recent compacting projection; null until first real trigger. */
 	lastSavedPct: number | null;
+	/** Current keep-recent-assistant-messages value; null until first context hook run. */
+	keepRecent: number | null;
 }
 
 /** Mutable gate status singleton, updated by the seam-A hook every turn. */
@@ -31,6 +33,7 @@ export const gateStatus: GateStatus = {
 	triggerState: "no_data",
 	lastSavedTokens: null,
 	lastSavedPct: null,
+	keepRecent: null,
 };
 
 /** @internal Guards against double-registration. */
@@ -43,7 +46,7 @@ let gateWidgetRegistered = false;
  * @param _width — available column width (unused; the strip is self-sizing).
  */
 export function renderGateWidget(_width: number): string[] {
-	const { rawTokens, threshold, triggerState } = gateStatus;
+	const { rawTokens, threshold, triggerState, keepRecent } = gateStatus;
 	if (rawTokens === null || triggerState === "no_data") {
 		return ["⟨compaction⟩ gate — / — compactable · —"];
 	}
@@ -51,6 +54,9 @@ export function renderGateWidget(_width: number): string[] {
 	let line = `⟨compaction⟩ gate ${fmt(rawTokens)} / ${fmt(threshold)} compactable · ${triggerState}`;
 	if (gateStatus.lastSavedTokens !== null) {
 		line += ` · last −${fmt(gateStatus.lastSavedTokens)} (${gateStatus.lastSavedPct}%)`;
+	}
+	if (keepRecent !== null) {
+		line += ` · keep=${keepRecent}`;
 	}
 	return [line];
 }

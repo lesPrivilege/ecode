@@ -52,6 +52,37 @@ export function staleViewHints(messages: Message[], ledger: TrustLedger): string
 	return hints;
 }
 
+// ---- S4: trust-protocol indicator widget ------------------------------------
+
+export interface HintIndicatorState {
+	turn: number;
+	hints: string[];
+}
+
+export const hintIndicator: HintIndicatorState = { turn: 0, hints: [] };
+
+export function renderHintIndicator(state: HintIndicatorState): string[] {
+	if (state.hints.length === 0) return [];
+	const paths = state.hints.map((h) => {
+		const m = h.match(/^\[stale-view\] ([^:]+): view from ([a-f0-9]+) .* \(now ([a-f0-9]+)\)/);
+		return m ? `${m[1]} ${m[2]}→${m[3]}` : "?";
+	});
+	return [`⟨trust⟩ turn ${state.turn}: stale-view ${paths.join(", ")}`];
+}
+
+let hintWidgetRegistered = false;
+
+export function registerHintWidget(
+	ui: { setWidget: (id: string, factory: () => { render: () => string[]; height: number }) => void },
+): void {
+	if (hintWidgetRegistered) return;
+	ui.setWidget("compaction-trust", () => ({
+		render: () => renderHintIndicator(hintIndicator),
+		get height() { return hintIndicator.hints.length > 0 ? 1 : 0; },
+	}));
+	hintWidgetRegistered = true;
+}
+
 /**
  * The volatile-tail message carrying the hint block. A minimal pi user message
  * (role/content/timestamp); the caller APPENDS it to the outgoing send array so

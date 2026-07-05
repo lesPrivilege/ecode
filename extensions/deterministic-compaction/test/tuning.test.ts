@@ -262,9 +262,8 @@ describe("DF2 /compaction command registered on the single compaction command", 
 
 	it("does not register a SECOND compaction command; the one command's completions include both families", async () => {
 		harness = await buildHarness(0);
-		// Exactly the four DF1 commands, one of them being `compaction`.
 		const names = [...harness.commands.keys()].sort();
-		expect(names).toEqual(["compact-diff", "compact-report", "compact-status", "compaction"]);
+		expect(names).toEqual(["compact-dash", "compact-diff", "compact-report", "compact-status", "compaction"]);
 
 		const compaction = harness.commands.get("compaction")!;
 		const all = (compaction.options.getArgumentCompletions?.("") ?? []) as Array<{ value: string }>;

@@ -30,6 +30,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { Box, Text } from "@earendil-works/pi-tui";
+import { CHTrace, registerCHWidget } from "./ch-trace.js";
 import { gateStatus, registerGateWidget } from "./gate-widget.js";
 import type { CompactionOptions } from "./compaction-core.js";
 import { estimateAgentTokens, projectContext, type ProjectionConfig } from "./projection.js";
@@ -42,6 +43,8 @@ import {
 	OBSERVABILITY_TRIGGER_TYPE,
 	registerObservabilityCommands,
 	type ObservabilityState,
+	type DashState,
+	formatDash,
 } from "./observability.js";
 import {
 	AmbientCollector,
@@ -64,7 +67,7 @@ import {
 } from "./tuning.js";
 import { toCore } from "./adapter.js";
 import { TrustLedger, hashContent, parseDiffstat } from "./trust-ledger.js";
-import { staleViewHints, staleHintMessage } from "./trust-hint.js";
+import { hintIndicator, registerHintWidget, staleViewHints, staleHintMessage } from "./trust-hint.js";
 import { readFileSync } from "node:fs";
 import { resolve as pathResolve } from "node:path";
 
@@ -257,6 +260,17 @@ export function installDeterministicCompaction(
 		schemaVersion: AMBIENT_SCHEMA_VERSION,
 	};
 
+	// --- CH trace (S3) ---------------------------------------------------------
+	const chTrace = new CHTrace();
+
+	// --- S5: dash state (accumulated across session) ----------------------------
+	const dashState: DashState = {
+		triggerCount: 0,
+		totalSavedTokens: 0,
+		hintCount: 0,
+		trustProtocolEnabled: config.trustProtocolEnabled ?? false,
+	};
+
 	// --- Ambient telemetry state ------------------------------------------------
 	const telemetry = new AmbientCollector();
 	telemetry.setTrustProtocolEnabled(config.trustProtocolEnabled ?? false);
@@ -303,9 +317,11 @@ export function installDeterministicCompaction(
 		observabilityState.turnCounter += 1;
 		const turn = observabilityState.turnCounter;
 
-		// Register the gate widget on first TUI-capable context event.
+		// Register widgets on first TUI-capable context event.
 		if (typeof ctx.ui.setWidget === "function") {
 			registerGateWidget(ctx.ui);
+			registerCHWidget(ctx.ui, chTrace);
+			if (config.trustProtocolEnabled) registerHintWidget(ctx.ui);
 		}
 
 		// DF2 negative-zone escape hatch: `/compaction off` disables seam-A entirely
@@ -321,6 +337,7 @@ export function installDeterministicCompaction(
 			gateStatus.rawTokens = estimateAgentTokens(event.messages as AgentMessage[]);
 			gateStatus.threshold = config.compactAfterInputTokens;
 			gateStatus.triggerState = "off";
+			gateStatus.keepRecent = config.compactionOptions?.keepRecentAssistantMessages ?? DEFAULT_KEEP_RECENT_ASSISTANT_MSGS;
 			return;
 		}
 
@@ -330,6 +347,7 @@ export function installDeterministicCompaction(
 		gateStatus.rawTokens = outcome.rawTokens;
 		gateStatus.threshold = config.compactAfterInputTokens;
 		gateStatus.triggerState = outcome.projected ? "active" : "waiting";
+		gateStatus.keepRecent = config.compactionOptions?.keepRecentAssistantMessages ?? DEFAULT_KEEP_RECENT_ASSISTANT_MSGS;
 
 		// Track last projection savings (null until the first real trigger).
 		if (outcome.projected && outcome.compaction) {
@@ -356,6 +374,11 @@ export function installDeterministicCompaction(
 			? staleViewHints(toCore(event.messages as AgentMessage[]).coreMessages, ledger)
 			: [];
 
+		// S4: update the hint indicator (widget reads from this).
+		hintIndicator.turn = turn;
+		hintIndicator.hints = staleHints;
+		if (staleHints.length > 0) dashState.hintCount += staleHints.length;
+
 		if (!outcome.projected) {
 			if (staleHints.length > 0) {
 				// Append-only: the entire existing prefix is byte-stable; only this
@@ -374,6 +397,8 @@ export function installDeterministicCompaction(
 
 		// Observability: a projection ACTUALLY fired this turn — make it visible via
 		// a custom ENTRY (never a mid-stream sendMessage, which would steer the agent).
+		dashState.triggerCount++;
+		dashState.totalSavedTokens += outcome.compaction?.tokensSaved ?? 0;
 		if (options.observability !== false && typeof (pi as { appendEntry?: unknown }).appendEntry === "function") {
 			emitTriggerMarker(pi, {
 				turn,
@@ -392,17 +417,22 @@ export function installDeterministicCompaction(
 		return { messages: outcome.messages };
 	});
 
-	// Ambient: tally each assistant response (output tokens, cache, re-reads).
-	if (telemetryEnabled) {
-		pi.on("message_end", (event) => {
-			const msg = event.message as AgentMessage;
-			if ((msg as { role?: string }).role === "assistant") {
-				// A pi AssistantMessage structurally satisfies AmbientCollector's
-				// AssistantLike (role/content/usage); the collector only reads those.
-				telemetry.recordAssistant(msg as unknown as AssistantLike);
-			}
-		});
-	}
+	// Ambient + CH trace: tally each assistant response.
+	pi.on("message_end", (event) => {
+		const msg = event.message as AgentMessage;
+		if ((msg as { role?: string }).role !== "assistant") return;
+		const usage = (msg as { usage?: { input?: number; output?: number; cacheRead?: number } }).usage;
+
+		// CH trace: record per-turn cache-hit ratio from provider usage.
+		if (usage && typeof usage.input === "number" && usage.input > 0) {
+			chTrace.record(observabilityState.turnCounter, usage.input, usage.cacheRead);
+		}
+
+		// Ambient telemetry (guarded separately — CH trace always runs).
+		if (telemetryEnabled) {
+			telemetry.recordAssistant(msg as unknown as AssistantLike);
+		}
+	});
 
 	// Ambient: flush at the prompt-completion boundary, and as a fallback at
 	// teardown for sessions that never completed a loop (see flushTelemetry doc).
@@ -423,6 +453,20 @@ export function installDeterministicCompaction(
 		const canRegisterEntryRenderer = typeof (pi as { registerEntryRenderer?: unknown }).registerEntryRenderer === "function";
 	if (options.observability !== false && canRegisterCommands) {
 		registerObservabilityCommands(pi, observabilityState);
+
+		// S5: /compact-dash — session-level summary of all TUI slices.
+		pi.registerCommand("compact-dash", {
+			description: "Session dashboard: gate status, trigger history, CH trace, trust hints",
+			handler: async (_args: string) => {
+				const text = formatDash(gateStatus, dashState, chTrace.getSamples());
+				pi.sendMessage({
+					customType: OBSERVABILITY_MESSAGE_TYPE,
+					content: text,
+					display: true,
+					details: { kind: "report" },
+				});
+			},
+		});
 		// Report output = custom MESSAGE (idle, safe) -> MessageRenderer.
 		if (canRegisterMsgRenderer) {
 			pi.registerMessageRenderer(OBSERVABILITY_MESSAGE_TYPE, makeReportRenderer({ Box, Text }));
