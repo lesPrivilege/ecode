@@ -1,0 +1,8 @@
+# Local dev symlink into pi's coding-agent node_modules (test/run runtime only).
+# Recreate with:
+#   ln -sfn ../pi/packages/coding-agent/node_modules node_modules
+node_modules
+
+# Generated smoke-run output (regenerable via `plan` -> `run`). These are
+# SYNTHETIC fixture runs, not committed data.
+results/

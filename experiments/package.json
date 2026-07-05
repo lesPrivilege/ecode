@@ -1,0 +1,20 @@
+{
+  "name": "@ecode/experiments",
+  "version": "0.1.0",
+  "private": true,
+  "description": "4-arm (A/B/C/D) compaction experiment harness for pi: plan/run/compare entry points over the G1b deterministic-compaction extension + mock provider. Mock-only; real providers swap in at G2 via lib/provider.ts.",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "plan": "node plan.ts",
+    "run-arm": "node --import ./lib/register.mjs run.ts",
+    "compare": "node --import ./lib/register.mjs compare.ts"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-agent-core": "*",
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@ecode/compaction-core": "*"
+  }
+}
