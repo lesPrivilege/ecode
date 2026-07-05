@@ -1,0 +1,4 @@
+# Local dev symlink into pi's coding-agent node_modules (test runtime only).
+# Recreate with:
+#   ln -sfn ../../pi/packages/coding-agent/node_modules node_modules
+node_modules

@@ -1,0 +1,30 @@
+{
+  "name": "@ecode/deterministic-compaction",
+  "version": "0.1.0",
+  "private": true,
+  "description": "pi extension: send-time deterministic context compaction (seam A context hook + optional seam B session_before_compact), backed by @ecode/compaction-core. Loads into pi via --extension.",
+  "type": "module",
+  "keywords": [
+    "pi-extension",
+    "context-compaction",
+    "coding-agent"
+  ],
+  "license": "MIT",
+  "author": "lesPrivilege <lesprivilege@gmail.com>",
+  "pi": {
+    "extensions": [
+      "src/extension.ts"
+    ]
+  },
+  "main": "src/extension.ts",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-agent-core": "*",
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@ecode/compaction-core": "*"
+  }
+}
