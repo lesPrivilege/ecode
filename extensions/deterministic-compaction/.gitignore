@@ -2,3 +2,7 @@
 # Recreate with:
 #   ln -sfn ../../pi/packages/coding-agent/node_modules node_modules
 node_modules
+
+# Throwaway ambient-telemetry output written by the test suite (ECODE_AMBIENT_DIR
+# in vitest.config.ts points here so tests never touch experiments/results/ambient).
+.ambient-test-tmp/

@@ -24,6 +24,13 @@ export default defineConfig({
 		globals: true,
 		environment: "node",
 		testTimeout: 30000,
+		// Redirect ambient telemetry writes to a throwaway, gitignored dir so the
+		// real dogfood data under experiments/results/ambient/ is never touched by
+		// the test suite (the smoke test drives a real session with telemetry ON by
+		// default). Individual tests may still override via writeOptions.dir.
+		env: {
+			ECODE_AMBIENT_DIR: fileURLToPath(new URL("./.ambient-test-tmp", import.meta.url)),
+		},
 		server: {
 			deps: {
 				external: [/@silvia-odwyer\/photon-node/],
