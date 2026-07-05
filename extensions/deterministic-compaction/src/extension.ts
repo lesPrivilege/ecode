@@ -68,6 +68,7 @@ import {
 import { toCore } from "./adapter.js";
 import { TrustLedger, hashContent, parseDiffstat } from "./trust-ledger.js";
 import { hintIndicator, registerHintWidget, staleViewHints, staleHintMessage } from "./trust-hint.js";
+import { WorkAnchor, renderAnchorBlock, anchorTailMessage, parseTestResult } from "./anchor.js";
 import { readFileSync } from "node:fs";
 import { resolve as pathResolve } from "node:path";
 
@@ -87,6 +88,17 @@ function readBoolEnv(name: string): boolean {
 	return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
 }
 
+/** Parse a comma/newline-separated env list into trimmed, non-empty items (undefined when unset/empty). */
+function readListEnv(name: string): string[] | undefined {
+	const raw = process.env[name];
+	if (raw === undefined) return undefined;
+	const items = raw
+		.split(/[,\n]/)
+		.map((s) => s.trim())
+		.filter((s) => s.length > 0);
+	return items.length > 0 ? items : undefined;
+}
+
 export interface DeterministicCompactionConfig extends ProjectionConfig {
 	seamBEnabled: boolean;
 	/**
@@ -95,6 +107,19 @@ export interface DeterministicCompactionConfig extends ProjectionConfig {
 	 * round-1 C arm must not be polluted). Packet 禁区: default must not be on.
 	 */
 	trustProtocolEnabled?: boolean;
+	/**
+	 * V3-WS master flag (env ECODE_SEMANTIC_ANCHOR). Default OFF. Gates the
+	 * work-semantic anchor block entirely, so flag-off stays byte-identical to v1.
+	 * This is the C'' arm — appended after R2-core, frozen off until then.
+	 */
+	semanticAnchorEnabled?: boolean;
+	/**
+	 * V3-WS pending targets (env ECODE_ANCHOR_ACCEPTANCE, comma/newline separated).
+	 * Acceptance outputs whose absence (no edit/write yet) surfaces as `pending:` in
+	 * the anchor block. Undefined when unset — the experiment harness supplies these
+	 * per-packet from its file-exists acceptance checks (out-of-fence integration).
+	 */
+	anchorAcceptanceTargets?: string[];
 }
 
 export function resolveConfig(): DeterministicCompactionConfig {
@@ -109,6 +134,8 @@ export function resolveConfig(): DeterministicCompactionConfig {
 		compactionOptions,
 		seamBEnabled: readBoolEnv("ECODE_SEAM_B"),
 		trustProtocolEnabled: readBoolEnv("ECODE_TRUST_PROTOCOL"),
+		semanticAnchorEnabled: readBoolEnv("ECODE_SEMANTIC_ANCHOR"),
+		anchorAcceptanceTargets: readListEnv("ECODE_ANCHOR_ACCEPTANCE"),
 	};
 }
 
@@ -207,16 +234,48 @@ export function installDeterministicCompaction(
 	// ECODE_TRUST_PROTOCOL flag is on, so flag-off leaves the send payload v1.
 	const ledger = new TrustLedger();
 
+	// V3-WS task 1 — work-semantic anchor. Fed by the SAME tool_result wiring as the
+	// ledger (reusing its hash/diffstat), read by the seam-A hook to inject a
+	// re-orientation block on projected turns. Only touched under ECODE_SEMANTIC_ANCHOR.
+	const anchor = new WorkAnchor();
+
 	// --- V2-TP task 1+2: ledger wiring via tool_result events --------------------
-	// Populates the ledger as tools execute. Read results record the view hash;
-	// edit/write results record the post-write disk hash + diffstat. All behind the
-	// trust protocol flag so flag-off runs never allocate hashes or touch the ledger.
-	if (config.trustProtocolEnabled) {
+	// Populates the ledger (V2-TP) and/or the work anchor (V3-WS) as tools execute.
+	// Read results record the view hash; edit/write results record the post-write
+	// disk hash + diffstat; bash results are classified as test runs for the anchor.
+	// The listener is registered under EITHER flag; each recorder is individually
+	// gated, so flag-off runs never allocate hashes or touch either structure, and
+	// the trust-on/anchor-off path stays byte-identical to v1.
+	if (config.trustProtocolEnabled || config.semanticAnchorEnabled) {
 		pi.on("tool_result", (event, ctx) => {
-			if (event.isError) return;
 			const turn = observabilityState.turnCounter;
 			const input = event.input as Record<string, unknown>;
+
+			// V3-WS: bash → test-run detection. Runs BEFORE the generic isError
+			// short-circuit because a failing test run (non-zero exit) is a fact worth
+			// anchoring, recorded honestly as a failure.
+			if (config.semanticAnchorEnabled && event.toolName === "bash") {
+				const command = typeof input.command === "string" ? input.command : "";
+				const output = event.content
+					.filter((b): b is { type: "text"; text: string } => b.type === "text")
+					.map((b) => b.text)
+					.join("\n");
+				const rec = parseTestResult(command, output, event.isError);
+				if (rec) anchor.recordTest(rec.command, rec.result, turn);
+				return;
+			}
+
 			const path = typeof input.path === "string" ? input.path : undefined;
+
+			// V3-WS: a failed edit/write is recorded honestly (the V2-TP ledger only
+			// records successes — evidence must reflect a real disk change).
+			if (event.isError) {
+				if (config.semanticAnchorEnabled && path && (event.toolName === "edit" || event.toolName === "write")) {
+					anchor.recordEditFailure(path, turn);
+				}
+				return;
+			}
+
 			if (!path) return;
 
 			if (event.toolName === "read") {
@@ -224,7 +283,10 @@ export function installDeterministicCompaction(
 					.filter((b): b is { type: "text"; text: string } => b.type === "text")
 					.map((b) => b.text)
 					.join("\n");
-				if (text) ledger.recordView(path, text, turn);
+				if (text) {
+					if (config.trustProtocolEnabled) ledger.recordView(path, text, turn);
+					if (config.semanticAnchorEnabled) anchor.recordRead(path, hashContent(text), turn);
+				}
 			} else if (event.toolName === "edit") {
 				const cwd = ctx.sessionManager.getCwd() ?? process.cwd();
 				const abs = pathResolve(cwd, path);
@@ -233,7 +295,8 @@ export function installDeterministicCompaction(
 					const diffstat = event.details?.patch
 						? parseDiffstat(event.details.patch)
 						: "edited";
-					ledger.recordEdit(path, disk, turn, diffstat);
+					if (config.trustProtocolEnabled) ledger.recordEdit(path, disk, turn, diffstat);
+					if (config.semanticAnchorEnabled) anchor.recordEdit(path, hashContent(disk), diffstat, turn);
 				} catch {
 					// File disappeared between tool write and event — skip.
 				}
@@ -241,7 +304,8 @@ export function installDeterministicCompaction(
 				const content = typeof input.content === "string" ? input.content : undefined;
 				if (content) {
 					const lines = content.split("\n").length;
-					ledger.recordEdit(path, content, turn, `+${lines}`);
+					if (config.trustProtocolEnabled) ledger.recordEdit(path, content, turn, `+${lines}`);
+					if (config.semanticAnchorEnabled) anchor.recordEdit(path, hashContent(content), `+${lines}`, turn);
 				}
 			}
 		});
@@ -409,12 +473,19 @@ export function installDeterministicCompaction(
 			});
 		}
 
-		if (staleHints.length > 0) {
-			return {
-				messages: [...outcome.messages, staleHintMessage(staleHints) as unknown as AgentMessage],
-			};
-		}
-		return { messages: outcome.messages };
+		// V3-WS task 3 — work-semantic anchor, injected on PROJECTED turns ONLY (a
+		// non-projected turn still holds full recent context, so it needs no anchor;
+		// and a projected turn already pays the cache break, so the tail is free).
+		// Same volatile-tail channel as the stale-view hint; appended AFTER it so the
+		// anchor is the most-recent block. Empty (and byte-identical to v1) when off.
+		const anchorLines = config.semanticAnchorEnabled
+			? renderAnchorBlock(anchor.snapshot(), turn, config.anchorAcceptanceTargets)
+			: [];
+
+		const tail: AgentMessage[] = [];
+		if (staleHints.length > 0) tail.push(staleHintMessage(staleHints) as unknown as AgentMessage);
+		if (anchorLines.length > 0) tail.push(anchorTailMessage(anchorLines) as unknown as AgentMessage);
+		return tail.length > 0 ? { messages: [...outcome.messages, ...tail] } : { messages: outcome.messages };
 	});
 
 	// Ambient + CH trace: tally each assistant response.
