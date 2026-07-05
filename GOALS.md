@@ -9,6 +9,10 @@ taucode 本体在兄弟目录 `../taucode/`，只读引用，不改。
 
 依赖图：G0 → G1a‖G1b 前半 → G1b → G1c → G2（执行轮，人分发）
 
+> **状态 2026-07-05**：G0/G1a/G1b/G1c 全部完成，各经独立复核（含一次
+> compaction-core export 修复，commit `469a68a`）。`pi/` 对 upstream 零 diff。
+> 剩 G2：待 ① DeepSeek/Mimo credential ② 人定 task packets ③ 质量复核判权在人。
+
 ---
 
 ## G0 · fork 与重摸底（先行，阻塞一切）
