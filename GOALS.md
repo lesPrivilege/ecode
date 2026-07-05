@@ -170,6 +170,14 @@ runtime policy 自动化的样本源。
 **验收**：调参后下一 turn 投影行为随之变化（mock 可测）；事件记录完整。
 **禁区**：不做自动策略（只做手动 + 记录）。
 
+> **实证发现（2026-07-05，DF2 完成时）**：`ExtensionAPI`/`ExtensionContext`
+> 无 settings 读写面——「写回 project settings」在 extension 层无干净落点，
+> 且 extension 自身参数是 factory 时一次性读 env，持久值也不会回流。
+> 落法改为 opt-in sidecar（记录、不回读），按「hook 能力不足时报告而非绕过」
+> 纪律处理。这是外化天花板的又一实例：extension 层够不到 settings 层，
+> session 内调参可行，跨 session 持久化需要上游（pi）暴露接口——已是
+> 论文素材，也是将来给 pi 上游提 issue/PR 的候选。
+
 ## DF3 · MCP bridge（后置，范围硬边界）
 
 `registerTool` 代理 MCP server tools（stdio + @modelcontextprotocol/sdk client
