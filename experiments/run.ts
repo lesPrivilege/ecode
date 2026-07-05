@@ -51,6 +51,7 @@ import { getScenario } from "./fixtures/index.js";
 import { isPacketSpec, loadPacket, type PacketScenario } from "./lib/packet.js";
 import type { Scenario } from "./lib/scenario.js";
 import { runAcceptance, type AcceptanceRow } from "./lib/acceptance.js";
+import { exportRunArtifacts, type ArtifactManifest } from "./lib/artifacts.js";
 import { copyWorkspaceFrom } from "./lib/workspace.js";
 import { resolveProvider, DEFAULT_PROVIDER } from "./lib/provider.js";
 import { RunMetrics, type MetaRow, type MetricRow } from "./lib/metrics.js";
@@ -76,6 +77,8 @@ interface Args {
 	workspaceFrom?: string;
 	/** Override the packets doc a `packet:`/`G2-…` scenario is loaded from. */
 	packetsDoc?: string;
+	/** Override provider model context window; used by B-fixed preflight. */
+	contextWindow?: number;
 }
 
 function parseArgs(argv: string[]): Args {
@@ -105,6 +108,7 @@ function parseArgs(argv: string[]): Args {
 		seamB: flags["seam-b"] === true || flags["seam-b"] === "true",
 		workspaceFrom: typeof flags["workspace-from"] === "string" ? flags["workspace-from"] : undefined,
 		packetsDoc: typeof flags["packets-doc"] === "string" ? flags["packets-doc"] : undefined,
+		contextWindow: asNum(flags["context-window"], Number.NaN),
 	};
 }
 
@@ -155,8 +159,18 @@ async function run(args: Args): Promise<void> {
 	if (!isArmId(args.arm)) throw new Error(`Unknown arm "${args.arm}". Use A, B, C, or D.`);
 	const arm = ARMS[args.arm];
 	const scenario = resolveScenario(args.scenario, args.packetsDoc);
-	const provider = resolveProvider(args.provider, scenario);
 	const packetScenario = isPacketScenario(scenario) ? scenario : null;
+	const anchorAcceptBefore = process.env.ECODE_ANCHOR_ACCEPTANCE;
+	if (packetScenario && process.env.ECODE_SEMANTIC_ANCHOR) {
+		const targets = packetScenario.acceptance
+			.filter((check) => check.kind === "file-exists" && "path" in check)
+			.map((check) => check.path)
+			.filter(Boolean);
+		if (targets.length > 0) process.env.ECODE_ANCHOR_ACCEPTANCE = targets.join(",");
+	}
+	const provider = resolveProvider(args.provider, scenario, {
+		...(Number.isFinite(args.contextWindow) ? { contextWindow: args.contextWindow } : {}),
+	});
 
 	// seam B: arm default OR explicit --seam-b.
 	const seamBInstalled = arm.seamBInstalled || args.seamB;
@@ -332,6 +346,8 @@ async function run(args: Args): Promise<void> {
 			seam_b_installed: seamBInstalled,
 			compact_after_input_tokens: arm.seamAInstalled ? args.compactAfter : null,
 			keep_recent_assistant_messages: arm.seamAInstalled ? args.keepRecent : null,
+			provider_context_window: Number.isFinite(args.contextWindow) ? args.contextWindow : null,
+			anchor_acceptance_targets: process.env.ECODE_ANCHOR_ACCEPTANCE ?? null,
 		},
 		started_at: new Date().toISOString(),
 		data_kind: dataKind,
@@ -355,11 +371,26 @@ async function run(args: Args): Promise<void> {
 		acceptRow = runAcceptance(packetScenario.acceptance, packetScenario.metadata.id, tempDir);
 	}
 
-	const rows: (MetricRow | AcceptanceRow)[] = [meta, ...metrics.getTurns(), summary, ...(acceptRow ? [acceptRow] : [])];
-
 	// Write output. Default path under results/ if --out omitted.
 	const outPath = resolveOut(args.out, arm.id, scenario.id);
 	mkdirSync(dirname(outPath), { recursive: true });
+
+	const artifactRow: ArtifactManifest = exportRunArtifacts({
+		workspace: tempDir,
+		outPath,
+		packet: packetScenario?.metadata ?? null,
+		acceptance: packetScenario?.acceptance ?? [],
+		workspaceFrom: args.workspaceFrom,
+	});
+
+	const rows: (MetricRow | AcceptanceRow | ArtifactManifest)[] = [
+		meta,
+		...metrics.getTurns(),
+		summary,
+		...(acceptRow ? [acceptRow] : []),
+		artifactRow,
+	];
+
 	const header = packetScenario
 		? `# ecode experiments run — arm ${arm.id} (${arm.label}) — packet ${packetScenario.metadata.id}\n` +
 			`# provider=${args.provider} compact-after=${args.compactAfter} keep-recent=${args.keepRecent} seam-b=${seamBInstalled}\n` +
@@ -380,6 +411,8 @@ async function run(args: Args): Promise<void> {
 	);
 
 	session.dispose();
+	if (anchorAcceptBefore === undefined) delete process.env.ECODE_ANCHOR_ACCEPTANCE;
+	else process.env.ECODE_ANCHOR_ACCEPTANCE = anchorAcceptBefore;
 	if (existsSync(tempDir)) rmSync(tempDir, { recursive: true, force: true });
 	if (existsSync(agentDir)) rmSync(agentDir, { recursive: true, force: true });
 }

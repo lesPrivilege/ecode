@@ -116,6 +116,8 @@ export function summarizeRun(path: string): RunSummary {
 		arm: str(summary, ["arm"], str(meta, ["arm"], file.replace(/\.jsonl$/, ""))),
 		label: str(summary, ["arm_label"], str(meta, ["arm_label"], "")),
 		scenario: str(summary, ["scenario"], str(meta, ["scenario"], "")),
+		provider: str(summary, ["provider"], str(meta, ["provider"], "")),
+		dataKind: str(summary, ["data_kind"], str(meta, ["data_kind"], "")),
 		file,
 		turnCount: summary ? num(summary, ["turn_count"]) : turns.length,
 		totalInputTokens: totalInput,

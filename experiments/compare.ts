@@ -86,6 +86,17 @@ function fmtCache(run: RunSummary): string {
 	return run.cacheSignalPresent ? fmtInt(run.totalCacheReadTokens ?? 0) : "null (no signal)";
 }
 
+function dataLabel(runs: RunSummary[]): string {
+	const providers = [...new Set(runs.map((r) => r.provider).filter(Boolean))].sort();
+	const kinds = [...new Set(runs.map((r) => r.dataKind).filter(Boolean))].sort();
+	if (providers.length === 1 && providers[0] === "mock") {
+		return "SYNTHETIC SMOKE FIXTURES — numbers below are from mock-provider runs, not real workloads.";
+	}
+	const providerPart = providers.length > 0 ? providers.join(", ") : "unknown provider";
+	const kindPart = kinds.length > 0 ? kinds.join(", ") : "unknown data kind";
+	return `REAL WORKLOAD DATA — provider=${providerPart}; data_kind=${kindPart}.`;
+}
+
 function main() {
 	const args = parseArgs(process.argv.slice(2));
 	if (args.inputs.length === 0) {
@@ -115,7 +126,7 @@ function main() {
 	const out: string[] = [];
 	out.push(`# ecode experiments — comparison report`);
 	out.push(`Baseline: arm ${baseline.arm} (${baseline.file})`);
-	out.push(`Data: SYNTHETIC SMOKE FIXTURES — numbers below are from mock-provider runs, not real workloads.`);
+	out.push(`Data: ${dataLabel(runs)}`);
 	out.push("");
 
 	// Side-by-side totals table.

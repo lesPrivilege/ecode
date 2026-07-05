@@ -22,5 +22,5 @@
       "@earendil-works/pi-coding-agent": ["../pi/packages/coding-agent/src/index.ts"]
     }
   },
-  "include": ["lib/**/*.ts", "fixtures/**/*.ts", "test/**/*.ts", "run.ts", "plan.ts", "compare.ts", "prepare-snapshot.ts"]
+  "include": ["lib/**/*.ts", "fixtures/**/*.ts", "test/**/*.ts", "run.ts", "plan.ts", "compare.ts", "prepare-snapshot.ts", "export-review.ts"]
 }

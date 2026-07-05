@@ -243,7 +243,7 @@ const DEEPSEEK_API_KEY_ENV = "DEEPSEEK_API_KEY";
  * letting resolution fail deep inside a stream attempt. Only the variable NAME
  * is named; no key value is ever read, logged, or embedded.
  */
-function deepseekProvider(): ExperimentProvider {
+function deepseekProvider(opts: ProviderOptions = {}): ExperimentProvider {
 	if (!process.env[DEEPSEEK_API_KEY_ENV]) {
 		throw new Error(
 			`Provider "deepseek" requires the ${DEEPSEEK_API_KEY_ENV} environment variable, which is not set. ` +
@@ -252,8 +252,8 @@ function deepseekProvider(): ExperimentProvider {
 		);
 	}
 
-	const model = getModels("deepseek").find((m) => m.id === DEEPSEEK_MODEL_ID) as Model<string> | undefined;
-	if (!model) {
+	const baseModel = getModels("deepseek").find((m) => m.id === DEEPSEEK_MODEL_ID) as Model<string> | undefined;
+	if (!baseModel) {
 		// Defensive: the built-in catalog is the source of truth for the id.
 		throw new Error(
 			`Provider "deepseek": built-in model "${DEEPSEEK_MODEL_ID}" not found in pi's model catalog. ` +
@@ -262,6 +262,7 @@ function deepseekProvider(): ExperimentProvider {
 					.join(", ")}.`,
 		);
 	}
+	const model = opts.contextWindow ? ({ ...baseModel, contextWindow: opts.contextWindow } as Model<string>) : baseModel;
 
 	return {
 		providerName: "deepseek",
@@ -398,7 +399,7 @@ export function resolveProvider(name: string, scenario: Scenario, opts: Provider
 		case "mock":
 			return mockProvider(scenario, opts);
 		case "deepseek":
-			return deepseekProvider();
+			return deepseekProvider(opts);
 		case "openai-compat": {
 			if (!opts.openAICompat) {
 				throw new Error(

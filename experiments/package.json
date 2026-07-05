@@ -9,7 +9,8 @@
     "typecheck": "tsc --noEmit",
     "plan": "node plan.ts",
     "run-arm": "node --import ./lib/register.mjs run.ts",
-    "compare": "node --import ./lib/register.mjs compare.ts"
+    "compare": "node --import ./lib/register.mjs compare.ts",
+    "export-review": "node --experimental-transform-types export-review.ts"
   },
   "peerDependencies": {
     "@earendil-works/pi-agent-core": "*",

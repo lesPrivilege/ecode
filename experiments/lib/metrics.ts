@@ -84,6 +84,10 @@ export interface MetaRow {
 		seam_b_installed: boolean;
 		compact_after_input_tokens: number | null;
 		keep_recent_assistant_messages: number | null;
+		/** Optional B-fixed preflight override for provider model context window. */
+		provider_context_window?: number | null;
+		/** Optional V3-WS harness wiring: file-exists acceptance targets. */
+		anchor_acceptance_targets?: string | null;
 	};
 	started_at: string;
 	/** Marker string so smoke fixtures are never mistaken for real G2 workloads. */

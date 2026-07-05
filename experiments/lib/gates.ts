@@ -15,6 +15,8 @@ export interface RunSummary {
 	arm: string;
 	label: string;
 	scenario: string;
+	provider: string;
+	dataKind: string;
 	file: string;
 	turnCount: number;
 	totalInputTokens: number;
