@@ -65,6 +65,26 @@ import {
 const DEFAULT_COMPACT_AFTER_INPUT_TOKENS = 32000;
 const DEFAULT_KEEP_RECENT_ASSISTANT_MSGS = 3;
 
+// ---- live gate line (shared between seam-A hook and widget) ----------------
+
+/**
+ * Latest gate status read by the widget component on each render.
+ * Updated every turn inside the seam-A context hook.
+ */
+interface GateStatus {
+	rawTokens: number | null;
+	threshold: number;
+	triggerState: "waiting" | "active" | "off" | "no_data";
+}
+
+const gateStatus: GateStatus = {
+	rawTokens: null,
+	threshold: DEFAULT_COMPACT_AFTER_INPUT_TOKENS,
+	triggerState: "no_data",
+};
+
+let gateWidgetRegistered = false;
+
 function readNumberEnv(name: string, fallback: number): number {
 	const raw = process.env[name];
 	if (raw === undefined || raw.trim() === "") return fallback;
@@ -232,10 +252,39 @@ export function installDeterministicCompaction(
 		}
 	};
 
+	// ---- live gate line: register the widget once ---------------------------
+	//
+	// The gate widget is a one-line strip rendered between the scrollable chat
+	// area and the editor. A module-level flag ensures it is registered on the
+	// very first context event that runs inside interactive TUI mode.
+
 	// Seam A — send-time projection on every LLM call.
-	pi.on("context", (event) => {
+	pi.on("context", (event, ctx) => {
 		observabilityState.turnCounter += 1;
 		const turn = observabilityState.turnCounter;
+
+		// Register the gate widget on first TUI-capable context event.
+		if (!gateWidgetRegistered && ctx.hasUI && typeof ctx.ui.setWidget === "function") {
+			ctx.ui.setWidget(
+				"compaction-gate",
+				(_tui, _theme) => ({
+					render(_width: number): string[] {
+						const { rawTokens, threshold, triggerState } = gateStatus;
+						if (rawTokens === null || triggerState === "no_data") {
+							return ["⟨compaction⟩ gate — / — compactable · —"];
+						}
+						const fmt = (n: number): string => n.toLocaleString();
+						return [
+							`⟨compaction⟩ gate ${fmt(rawTokens)} / ${fmt(threshold)} compactable · ${triggerState}`,
+						];
+					},
+					get height(): number {
+						return 1;
+					},
+				}),
+			);
+			gateWidgetRegistered = true;
+		}
 
 		// DF2 negative-zone escape hatch: `/compaction off` disables seam-A entirely
 		// for this session. Pass messages through UNCHANGED — byte-identical to never
@@ -246,10 +295,19 @@ export function installDeterministicCompaction(
 				const rawTokens = estimateAgentTokens(event.messages as AgentMessage[]);
 				telemetry.onTurn(rawTokens, false, []);
 			}
+			// Update gate: tuning off → show raw tokens + "off" label.
+			gateStatus.rawTokens = estimateAgentTokens(event.messages as AgentMessage[]);
+			gateStatus.threshold = config.compactAfterInputTokens;
+			gateStatus.triggerState = "off";
 			return;
 		}
 
 		const outcome = projectContext(event.messages as AgentMessage[], config);
+
+		// Update gate status from projection outcome.
+		gateStatus.rawTokens = outcome.rawTokens;
+		gateStatus.threshold = config.compactAfterInputTokens;
+		gateStatus.triggerState = outcome.projected ? "active" : "waiting";
 
 		// Ambient: record the OUTGOING payload's estimated tokens (post-projection
 		// when projected, raw otherwise) and whether we projected this turn.
