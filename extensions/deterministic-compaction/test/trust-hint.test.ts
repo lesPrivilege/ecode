@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { staleViewHints } from "../src/trust-hint.ts";
+import { staleViewHints, staleHintMessage } from "../src/trust-hint.ts";
 import { TrustLedger, hashContent } from "../src/trust-ledger.ts";
 import type { Message } from "../src/compaction-core.js";
 
@@ -64,5 +64,25 @@ describe("staleViewHints — T3 (read views only, ledger mismatch)", () => {
 			readResult("tc2", "old2"),
 		];
 		expect(staleViewHints(messages, ledger).length).toBe(1);
+	});
+});
+
+describe("staleHintMessage — T3 volatile tail (prefix stability)", () => {
+	it("is appended, leaving the base array as an unchanged prefix", () => {
+		const base = [
+			{ role: "user", content: "hi", timestamp: 1 },
+			{ role: "assistant", content: "ok", timestamp: 2 },
+		];
+		const hints = ["[stale-view] /a.ts: view from aaaa1111 predates your edit at turn 4 (now bbbb2222); re-read only if you need current content."];
+		const sent = [...base, staleHintMessage(hints)];
+		// The cache-critical property: every original message is byte-identical and in place.
+		expect(sent.slice(0, base.length)).toEqual(base);
+		expect(sent).toHaveLength(base.length + 1);
+		expect(sent[sent.length - 1]).toEqual({ role: "user", content: hints[0], timestamp: 0 });
+	});
+
+	it("joins multiple hints into one tail block", () => {
+		const msg = staleHintMessage(["a", "b"]);
+		expect(msg).toEqual({ role: "user", content: "a\nb", timestamp: 0 });
 	});
 });

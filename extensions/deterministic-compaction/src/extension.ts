@@ -62,6 +62,9 @@ import {
 	type PersistOptions,
 	type TuningTelemetry,
 } from "./tuning.js";
+import { toCore } from "./adapter.js";
+import { TrustLedger } from "./trust-ledger.js";
+import { staleViewHints, staleHintMessage } from "./trust-hint.js";
 
 const DEFAULT_COMPACT_AFTER_INPUT_TOKENS = 32000;
 const DEFAULT_KEEP_RECENT_ASSISTANT_MSGS = 3;
@@ -86,7 +89,7 @@ export interface DeterministicCompactionConfig extends ProjectionConfig {
 	 * trust-protocol behaviour so flag-off stays byte-identical to v1 (the G2
 	 * round-1 C arm must not be polluted). Packet 禁区: default must not be on.
 	 */
-	trustProtocolEnabled: boolean;
+	trustProtocolEnabled?: boolean;
 }
 
 export function resolveConfig(): DeterministicCompactionConfig {
@@ -194,6 +197,11 @@ export function installDeterministicCompaction(
 ): InstalledHandle {
 	const observabilityState: ObservabilityState = { config, turnCounter: 0 };
 
+	// V2-TP task 1 — session view ledger. Populated by wiring (read/edit events);
+	// read by the seam-A hook to detect stale views. Only consulted when the
+	// ECODE_TRUST_PROTOCOL flag is on, so flag-off leaves the send payload v1.
+	const ledger = new TrustLedger();
+
 	// --- DF2 tuning state -------------------------------------------------------
 	// A typed, mutable view over the SAME `config` object observabilityState holds,
 	// plus the on/off master switch. The seam-A hook below reads `tuning.isEnabled()`
@@ -298,7 +306,24 @@ export function installDeterministicCompaction(
 			telemetry.onTurn(sentTokens, outcome.projected, compactedReadPaths(outcome));
 		}
 
+		// V2-TP task 3 — stale-view hints, appended to the SEND-TIME tail only.
+		// Empty when the flag is off (short-circuit: no toCore pass, no allocation),
+		// so both returns below stay byte-identical to v1 (baseline discipline).
+		const staleHints = config.trustProtocolEnabled
+			? staleViewHints(toCore(event.messages as AgentMessage[]).coreMessages, ledger)
+			: [];
+
 		if (!outcome.projected) {
+			if (staleHints.length > 0) {
+				// Append-only: the entire existing prefix is byte-stable; only this
+				// trailing hint message is uncached. Never persisted (send-time return).
+				return {
+					messages: [
+						...(event.messages as AgentMessage[]),
+						staleHintMessage(staleHints) as unknown as AgentMessage,
+					],
+				};
+			}
 			// Identity: return undefined so pi keeps the original messages and the
 			// prompt prefix stays byte-stable for provider caching.
 			return;
@@ -316,6 +341,11 @@ export function installDeterministicCompaction(
 			});
 		}
 
+		if (staleHints.length > 0) {
+			return {
+				messages: [...outcome.messages, staleHintMessage(staleHints) as unknown as AgentMessage],
+			};
+		}
 		return { messages: outcome.messages };
 	});
 

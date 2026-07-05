@@ -51,3 +51,13 @@ export function staleViewHints(messages: Message[], ledger: TrustLedger): string
 	}
 	return hints;
 }
+
+/**
+ * The volatile-tail message carrying the hint block. A minimal pi user message
+ * (role/content/timestamp); the caller APPENDS it to the outgoing send array so
+ * the existing prefix stays byte-stable (only this trailing message is uncached),
+ * and it is never persisted (the context-hook return is send-time only).
+ */
+export function staleHintMessage(hints: string[]): { role: "user"; content: string; timestamp: number } {
+	return { role: "user", content: hints.join("\n"), timestamp: 0 };
+}
