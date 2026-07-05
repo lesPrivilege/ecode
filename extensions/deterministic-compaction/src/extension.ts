@@ -63,8 +63,10 @@ import {
 	type TuningTelemetry,
 } from "./tuning.js";
 import { toCore } from "./adapter.js";
-import { TrustLedger } from "./trust-ledger.js";
+import { TrustLedger, hashContent, parseDiffstat } from "./trust-ledger.js";
 import { staleViewHints, staleHintMessage } from "./trust-hint.js";
+import { readFileSync } from "node:fs";
+import { resolve as pathResolve } from "node:path";
 
 const DEFAULT_COMPACT_AFTER_INPUT_TOKENS = 32000;
 const DEFAULT_KEEP_RECENT_ASSISTANT_MSGS = 3;
@@ -202,6 +204,46 @@ export function installDeterministicCompaction(
 	// ECODE_TRUST_PROTOCOL flag is on, so flag-off leaves the send payload v1.
 	const ledger = new TrustLedger();
 
+	// --- V2-TP task 1+2: ledger wiring via tool_result events --------------------
+	// Populates the ledger as tools execute. Read results record the view hash;
+	// edit/write results record the post-write disk hash + diffstat. All behind the
+	// trust protocol flag so flag-off runs never allocate hashes or touch the ledger.
+	if (config.trustProtocolEnabled) {
+		pi.on("tool_result", (event, ctx) => {
+			if (event.isError) return;
+			const turn = observabilityState.turnCounter;
+			const input = event.input as Record<string, unknown>;
+			const path = typeof input.path === "string" ? input.path : undefined;
+			if (!path) return;
+
+			if (event.toolName === "read") {
+				const text = event.content
+					.filter((b): b is { type: "text"; text: string } => b.type === "text")
+					.map((b) => b.text)
+					.join("\n");
+				if (text) ledger.recordView(path, text, turn);
+			} else if (event.toolName === "edit") {
+				const cwd = ctx.sessionManager.getCwd() ?? process.cwd();
+				const abs = pathResolve(cwd, path);
+				try {
+					const disk = readFileSync(abs, "utf-8");
+					const diffstat = event.details?.patch
+						? parseDiffstat(event.details.patch)
+						: "edited";
+					ledger.recordEdit(path, disk, turn, diffstat);
+				} catch {
+					// File disappeared between tool write and event — skip.
+				}
+			} else if (event.toolName === "write") {
+				const content = typeof input.content === "string" ? input.content : undefined;
+				if (content) {
+					const lines = content.split("\n").length;
+					ledger.recordEdit(path, content, turn, `+${lines}`);
+				}
+			}
+		});
+	}
+
 	// --- DF2 tuning state -------------------------------------------------------
 	// A typed, mutable view over the SAME `config` object observabilityState holds,
 	// plus the on/off master switch. The seam-A hook below reads `tuning.isEnabled()`
@@ -217,6 +259,7 @@ export function installDeterministicCompaction(
 
 	// --- Ambient telemetry state ------------------------------------------------
 	const telemetry = new AmbientCollector();
+	telemetry.setTrustProtocolEnabled(config.trustProtocolEnabled ?? false);
 	let telemetryEnabled = !(options.telemetry?.disabled ?? false);
 	const writeRow = options.telemetry?.write ?? appendAmbientRow;
 	const writeOpts = options.telemetry?.writeOptions;

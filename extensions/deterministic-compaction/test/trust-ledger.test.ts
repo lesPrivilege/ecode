@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { TrustLedger, hashContent } from "../src/trust-ledger.ts";
+import { TrustLedger, hashContent, parseDiffstat } from "../src/trust-ledger.ts";
 
 describe("hashContent — T1 (taucode-aligned SHA-256 / 8-hex)", () => {
 	it("is SHA-256 truncated to 8 hex chars", () => {
@@ -31,5 +31,30 @@ describe("TrustLedger — T1 view registration", () => {
 		l.recordEdit("/a.ts", "world", 3, "+1 -1");
 		expect(l.get("/a.ts")?.hash).toBe(hashContent("world"));
 		expect(l.get("/a.ts")?.turn).toBe(3);
+	});
+});
+
+describe("parseDiffstat — unified patch → +N -M string", () => {
+	it("counts added and removed lines from a unified patch", () => {
+		const patch = [
+			"--- a/file.ts",
+			"+++ b/file.ts",
+			"@@ -1,3 +1,4 @@",
+			" unchanged",
+			"-old line",
+			"+new line",
+			"+extra line",
+			" more unchanged",
+		].join("\n");
+		expect(parseDiffstat(patch)).toBe("+2 -1");
+	});
+	it("handles pure addition", () => {
+		expect(parseDiffstat("+++ b/file.ts\n+line1\n+line2")).toBe("+2 -0");
+	});
+	it("handles pure deletion", () => {
+		expect(parseDiffstat("--- a/file.ts\n-gone1\n-gone2\n-gone3")).toBe("+0 -3");
+	});
+	it("returns +0 -0 on empty input", () => {
+		expect(parseDiffstat("")).toBe("+0 -0");
 	});
 });

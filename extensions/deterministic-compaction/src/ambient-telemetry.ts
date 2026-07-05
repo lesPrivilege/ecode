@@ -96,6 +96,8 @@ export interface AmbientSessionRow {
 	total_cache_read_tokens: number | null;
 	/** Whether ANY turn carried a cacheRead signal (drives null-vs-0). */
 	cache_signal_present: boolean;
+	/** V2-TP: whether the trust protocol flag was enabled for this session. */
+	trust_protocol_enabled: boolean;
 }
 
 /**
@@ -265,6 +267,7 @@ export class AmbientCollector {
 	private projectedTurnCount = 0;
 	private cacheTotal = 0;
 	private cacheSignalPresent = false;
+	private _trustProtocolEnabled = false;
 
 	private readonly seenReadPaths = new Set<string>();
 	private readonly compactedPaths = new Set<string>();
@@ -329,6 +332,11 @@ export class AmbientCollector {
 		this.pendingProjected = false;
 	}
 
+	/** V2-TP: record whether the trust protocol flag is enabled for this session. */
+	setTrustProtocolEnabled(enabled: boolean): void {
+		this._trustProtocolEnabled = enabled;
+	}
+
 	/** True once any turn has been recorded (so we don't flush an empty session). */
 	hasData(): boolean {
 		return this.turnCount > 0;
@@ -355,6 +363,7 @@ export class AmbientCollector {
 			projected_turn_count: this.projectedTurnCount,
 			total_cache_read_tokens: this.cacheSignalPresent ? this.cacheTotal : null,
 			cache_signal_present: this.cacheSignalPresent,
+			trust_protocol_enabled: this._trustProtocolEnabled,
 		};
 	}
 }

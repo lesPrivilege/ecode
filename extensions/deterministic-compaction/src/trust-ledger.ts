@@ -21,6 +21,20 @@ export interface LedgerEntry {
 	diffstat?: string;
 }
 
+/**
+ * Parse a unified diff/patch into a "+N -M" diffstat string.
+ * Counts only content lines (skips --- / +++ header lines).
+ */
+export function parseDiffstat(patch: string): string {
+	let added = 0;
+	let removed = 0;
+	for (const line of patch.split("\n")) {
+		if (line.startsWith("+") && !line.startsWith("+++")) added++;
+		else if (line.startsWith("-") && !line.startsWith("---")) removed++;
+	}
+	return `+${added} -${removed}`;
+}
+
 export class TrustLedger {
 	private readonly byPath = new Map<string, LedgerEntry>();
 
