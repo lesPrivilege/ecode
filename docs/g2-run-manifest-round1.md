@@ -18,6 +18,11 @@
 3. 按上表顺序逐 run 执行；每 run 核对 JSONL 里 `workspace.manifestHash` 与第 2 步一致。
 4. 12 run 完成后 `compare.ts` 出三份四臂报告；D1 的导出计数核对人工跑
    （packet 文档里的 Validation 补充脚本）。
+   **provider-outage 条款（2026-07-05 补,源自 TUI 验收阻塞)**：
+   连接类错误（Connection error / 网络超时）的 run 标记 `provider-error`,
+   同臂立即重试一次;仍败则顺延该臂稍后再跑。此类 run **不计入数据、
+   不计入 invalid,不计入判定门统计**——环境缺席既非 compaction 未触发,
+   也非行为异常;它只说明 provider/key/网络当下不可用。
 5. 人工复核表逐份填写；D1 若未复现负区特征（re-read 率显著高于 R1/E1），
    round 2 前先补跑 D2 替代。
 
