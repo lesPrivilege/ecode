@@ -112,14 +112,72 @@ friction: every relative read fails first try. Options: (a) confirm the mechanis
 with a pi-side trace, (b) find a pi flag/env to pin session cwd, (c) document
 "reads are cwd-relative to the package root; use absolute paths" until upstream.
 
+## Round 4 — DF2 subcommands (keep-recent / on-off / telemetry)
+
+Run against the still-loaded pre-F-A extension (same process); gate armed at
+`compact-after=10`.
+
+| Item | Result | Evidence |
+| --- | --- | --- |
+| `set keep-recent=1` | **PASS** | protection window `3 → 1` in `/compact-status`. |
+| `/compaction off` | **PASS** | "Compaction OFF — messages pass through unprojected"; no `[compaction fired]` on the next ("four") turn. |
+| `/compaction on` | **PASS** | marker fired again on the "five" turn. |
+| `/compaction telemetry off` / `on` | **PASS** (acks) | "Ambient telemetry disabled / enabled for this session." Single-turn write-skip not isolable from file size alone. |
+
+**Obs — off-vs-active (log-only).** With compaction OFF, `/compact-status` still
+reports `Trigger: active` + a projection. Root cause (observability.ts): the status
+builder hardcodes `enabled: true` and reports the *gate* state, not the on/off
+toggle. Minor; candidate for a "(compaction OFF — projection hypothetical)" note.
+
+## Round 5 — observability payload + persistence + F-A live
+
+- **`/compact-report` + `json` — PASS.** The JSON is the paper-grade artifact:
+  `diffs[0]` = m10 / turn 5 read of loop-protocol.md, 329→38 tok, saved 291;
+  `byTool read×1×291`; `options.minResultTokens=200` (the compaction floor).
+  Consistent across text / JSON / status views.
+- **DF2 persistence ceiling — confirmed + root-caused.** After a genuine restart,
+  compact-after/keep-recent reset to env defaults (32,000 / 3). `tuning.ts`: pi's
+  extension API exposes no settings write-back, config is read once at factory
+  time, and the `<cwd>/.pi/settings.json` writer is off by default → `/compaction
+  set` is session-local by construction. Matches `59c2558`. (Even if the writer
+  were on, F-E's cwd bug would misfile it under the pi package dir.)
+- **F-A fix — VERIFIED LIVE.** After a real agent restart both labels render:
+  `Gate: … (0 < 32,000, compactable-content estimate)` and `compact-after 32000
+  -> 500 compactable-content tokens … Context now ~0 total tokens.` `28db88c` is
+  now confirmed in the running app, not just in tests.
+
+## Verification node (batched src/fs)
+
+**Correction — earlier "F-F / compile-cache staleness" is RETRACTED.** During R5 a
+"fresh" session showed the *old* F-A labels; I misdiagnosed it as Node's compile
+cache serving stale bytecode (over-reading a 10:11 cache-dir mtime). Real cause,
+per operator: that was a new pi **session, not a new process** — the extension
+module loads once per process, so an in-process new session keeps the old code
+while the per-session factory still re-reads env config (hence 32,000/3). A genuine
+process restart reloads the edited extension correctly (F-A now live). **No
+compile-cache bug; no `bin/ecode` change needed.** Lesson: for extension-reload
+checks, "relaunch" must mean a new process — distinguish session-reset from
+process-restart.
+
+**Ambient:** the real restart created a 9th JSONL (one-per-invocation reconfirmed);
+telemetry off/on acks work.
+
+**Protocol recommendation for Cowork:** formalize in `校验节流` that *source-level*
+verification (reading extension src, running tests, resolving mechanism) is the
+expensive class and batches to the node; within a round the operator pastes only
+explicit pi-session text and the Code session records it.
+
 ## Handoff / git
 
-- Round-1 retrospective (Fable) was **staged but uncommitted** on
-  `launcher-test-2026-07-05.md` while this was written. Recommended commit order:
-  (1) that retrospective, (2) this interactive-round report. This file does not
-  touch the staged one; commit each with an explicit pathspec (not `git add -A`)
-  to keep them as separate one-thing commits.
-- Fix-forward: F-A label fix (relabel the two token scales, no semantic change)
-  per Cowork ruling — observability.ts + extension.ts. F-E stays pi-side/log-only.
-- Log-only: F-A (threshold semantics), F-E (relative-read base) — F-C / F-D are
-  records. None blocking.
+- Commits landed (surgical pathspec, no `git add -A`): `28db88c` F-A label fix
+  (now live-verified) · `4e3c57c` Fable round-1 retrospective · `676e458` this
+  report · `37fc464` loop-protocol 校验节流. Cleared two stale git locks from an
+  interrupted ~17:24 operation to get them through.
+- Fix-forward: **F-A** (`28db88c`) — verified live post-restart.
+- Log-only for Cowork: **F-E** (relative-read base, pi-side) · **off-vs-active**
+  (`/compact-status` ignores on/off) · persistence ceiling (confirmed upstream
+  API limit). F-F retracted above.
+- Verification node: condition 2 (T9 live) met at R1; the interactive surface, DF2
+  subcommands, and the savings path are all exercised, 0 FAIL. **Next phase per
+  operator: heavyweight (real-workload) tests — this launcher/subcommand surface is
+  now exhausted.**
