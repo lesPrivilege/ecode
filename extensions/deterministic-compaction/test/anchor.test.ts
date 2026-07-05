@@ -127,6 +127,14 @@ describe("renderAnchorBlock — pending section", () => {
 			"pending: SUBSYSTEM-MAP.md",
 		]);
 	});
+
+	it("a FAILED edit of a target does NOT clear it — a failed write produced nothing", () => {
+		const a = new WorkAnchor();
+		a.recordEditFailure("SUBSYSTEM-MAP.md", 3);
+		const lines = renderAnchorBlock(a.snapshot(), 3, ["SUBSYSTEM-MAP.md"]);
+		expect(lines).toContain("pending: SUBSYSTEM-MAP.md");
+		expect(lines).toContain("edits: SUBSYSTEM-MAP.md failed");
+	});
 });
 
 describe("renderAnchorBlock — full block ordering + determinism", () => {

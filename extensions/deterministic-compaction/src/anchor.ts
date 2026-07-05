@@ -133,7 +133,10 @@ export function renderAnchorBlock(snap: AnchorSnapshot, turn: number, acceptance
 		lines.push(`tests: ${snap.tests.map((t) => `${t.command} → ${t.result}`).join(", ")}`);
 	}
 
-	const pending = (acceptanceTargets ?? []).filter((t) => !editedPaths.has(t));
+	// A target is satisfied only by a SUCCESSFUL edit/write — a failed attempt
+	// produced nothing, so it must stay pending (the whole point of the reminder).
+	const producedPaths = new Set(snap.edits.filter((e) => !e.failed).map((e) => e.path));
+	const pending = (acceptanceTargets ?? []).filter((t) => !producedPaths.has(t));
 	if (pending.length > 0) {
 		lines.push(`pending: ${pending.join(", ")}`);
 	}
