@@ -1,0 +1,98 @@
+# Goal 切分 — ecode：context 经济验证台（本 repo 为工作根）
+
+2026-07-05。上游依据：`docs/roadmap-context-economy-2026-07.md`（已收束入本 repo）。
+布局：`pi/`（上游 fork，G0 建立）、`packages/compaction-core/`（G1a）、
+`extensions/`（G1b）、`experiments/`（G1c）、`docs/`（携带文档 + survey）。
+taucode 本体在兄弟目录 `../taucode/`，只读引用，不改。
+分发模式：每个 Goal 一个 Opus/Codex agent，packet 自含（精确文件清单 + 验收标准 +
+禁区），禁探索式阅读。判权不下放：参数取值、质量复核、判定门裁决归人。
+
+依赖图：G0 → G1a‖G1b 前半 → G1b → G1c → G2（执行轮，人分发）
+
+---
+
+## G0 · fork 与重摸底（先行，阻塞一切）
+
+**输入**：https://github.com/badlogic/pi-mono （fork/clone 到本文件夹 `pi/`）
+**任务**：
+1. clone 最新 main，装依赖，跑通 `pi-coding-agent` 基本 loop（任一 provider）。
+2. 重新核对四项（6 月读数已过期两周+，以现源码为准，逐条给 file:line 引用）：
+   - `read` 工具输出格式（`packages/coding-agent/src/core/tools/read.ts`）——有无 path/hash 结构；
+   - extension 注册 API 确切签名（`src/core/extensions/` + 根 `examples/extensions/`）；
+   - `context` hook（原 `agent-harness.ts` transformContext）：签名是否仍为
+     `AgentMessage[] → {messages?}`；返回值是否影响 session 持久化（预期仅 send 投影不落盘，须验证）；
+   - `session_before_compact` hook 是否仍可返回 `{compaction}` 替代原生 LLM compact；
+   - pi-ai 对 OpenAI 兼容 endpoint 的 cache 字段透传（DeepSeek `prompt_cache_hit_tokens` 会不会被丢弃）。
+3. 记录 pi 原生 compaction 现参数（reserveTokens/keepRecentTokens 默认值是否仍为 16384/20000）。
+
+**产出**：`pi/` 可运行 + `docs/g0-survey.md`（每项含 file:line）
+**验收**：五项全部有答案；任何与 6 月文档不符处显式标注 DRIFT。
+**禁区**：不改 pi 源码；不开始移植。
+
+## G1a · compaction externalization（与 G0 并行）
+
+**输入**（路径已确认）：
+- `../taucode/packages/core/src/compaction.ts`
+- `../taucode/packages/core/src/compaction-report.ts`
+- `../taucode/packages/core/test/compaction.test.ts`（26 用例）
+- `docs/taucode-wrapup-2026-06.md` Part 2 搬/改/弃清单。
+**任务**：把纯函数模块解耦为独立包 `packages/compaction-core/`（放本文件夹）：
+1. `strategies` 注入替代硬编码 `DEFAULT_TOOL_COMPACTION_STRATEGIES`；
+2. tool-name 匹配函数注入；
+3. path/hash 提取函数注入（hashline `¶path#hash` 退化路径：path+行数）。
+算法与投影语义一字不动；26 个测试全绿 + 为三个注入点补新测试。
+
+**产出**：独立可 import 的包，零 pi 依赖，零 taucode-harness 依赖。
+**验收**：原测试全过；新注入点测试；`projectCompaction()` 报告 shape 不变。
+**禁区**：不改算法；不做 proxy；不发 npm。
+
+## G1b · pi extension + adapter（依赖 G0 + G1a；已按 g0-survey 修订）
+
+**前置**：ecode 根 `git init`（agent 产出须可 diff 审计）。无需 provider 真 key（见任务 4）。
+**输入**：本 packet + `docs/g0-survey.md` + `docs/taucode-on-pi-integration.md` 第 3 节 + `packages/compaction-core/` 的公开 API。
+
+**任务**：
+1. `Message ↔ AgentMessage` adapter：对照集成文档第 3 节映射表 + survey 实测签名。assistant toolCall block ↔ toolCalls[]，toolResult(content blocks, isError, toolCallId) ↔ result message，配对按 toolCallId 重写。
+   **survey 修正（Item 1）**：pi 的 read 结果是纯文本，**无 path 前缀、无 hash、无 hashline**。path/hash 提取注入必须走降级路径：path 从**配对 toolCall 的 arguments**（`{path, offset?, limit?}`）取，hash 对 result text 现算（或退化为 path+字节数）。不得假设结果文本里有 `¶path#hash`。
+2. extension 注册 `context` hook（缝 A）：factory 签名 `ExtensionFactory = (pi: ExtensionAPI) => void`（types.ts:1447），模板在 `pi/packages/coding-agent/examples/extensions/`（DRIFT：不在 repo 根）。hybrid 门控保留——门下**原样返回**保 prefix cache，跨门投影。survey Item 3 确认 hook 每次 LLM call 都跑且仅影响 send payload：投影必须幂等（compaction-core 已是）且有性能预算（大 message 数组下的耗时上限）。token 估计复用 pi 侧现成值，禁止另造 4-char 估算。
+3. （可选，缝 B）`session_before_compact` 返回 `{compaction}`，参照 `examples/extensions/custom-compaction.ts:114-120` 模板；feature-flag 关默认。注意 `fromHook: true` 入档后，pi 下次 compaction 会跳过其 details 的 file-op 提取（compaction.ts:43）——checkpoint summary 须自含。
+4. **冒烟不依赖真 key**：用 `pi.registerProvider`（types.ts:1360）注册一个 scripted mock provider，回放固定 toolCall/结果序列，驱动 loop 穿过 context hook 验证投影与配对。live round-trip 留给 G1c（届时人提供 DeepSeek/Mimo key）。
+
+**产出**：`extensions/deterministic-compaction/`，对 pi 上游 diff = 0（纯 extension）。
+**验收**：mock provider 冒烟跑通；开/关 extension 的投影报告数字合理；session JSONL 原始历史未被改写（落盘校验）；adapter 对 read 降级路径有专项测试。
+**禁区**：不 fork/patch pi core；不碰 `../taucode`；发现 hook 能力不足时报告而非绕过。
+
+## G1c · 四臂实验 harness（依赖 G1b）
+
+**任务**：run 脚本 + 报告器，四臂同台：
+| 臂 | 配置 |
+| --- | --- |
+| A | 原生 compaction 关 + 无 hook |
+| B | pi 原生 LLM-summary（summarizer in+out 计入成本） |
+| C | G1b extension（推荐参数 keep=3 / compact-after=32k，参数可 sweep） |
+| D | 门下 C + 跨阈值缝 B checkpoint |
+
+指标每 run 落 JSONL：总 input/output token、tool-call 数、re-read 数、
+**compacted-path re-read 率**（引用追踪：被压缩 path 的后续 read 事件）、
+provider cache hit/miss（survey Item 5 确认：DeepSeek `prompt_cache_hit_tokens` 经 pi-ai 映射为 `usage.cacheRead`，直接取；无则显式 null）、completion 占位字段（人工填）。
+判定门代码化：未触发→invalid；token 省但 churn 升→suspicious 标记。
+
+**产出**：`experiments/`（plan/run/compare 三个入口，对齐原 dogfood-p0.mjs 语义）。
+**验收**：四臂各跑一个冒烟 packet，报告可比对；sweep 参数化（4k/16k/32k/64k）。
+**禁区**：不自造 task packets 内容（G2 人定）；不下质量结论。
+
+## G2 · 执行轮（人分发，不进本轮 coding）
+
+task packets：refactor / exploration / **direct-transformation（负区间必跑臂）**
+三类固定编号；Mimo 为被试跑 token 轴；DeepSeek API 跑 cache 轴对账
+（预期 transition 曲线 vs 实测 hit/miss）。判定与止损按 roadmap 第四节：
+C 对 A <10% 且 re-read 率不降 → 归档阴性。
+
+---
+
+### 给分发者的备注
+
+- G0 与 G1a 可同时开两个 agent；G1b 必须等两者 merge。
+- 每个 agent 冷启动只喂：本 packet + 列名文件 + G0 的 survey（G1b/G1c）。
+  不给整个 taucode docs——那是污染源也是 token 浪费（见 note-subagent-economy）。
+- 「15-17%」数字禁止出现在任何代码注释或 README 里，干净 run 之前它不存在。

@@ -1,0 +1,30 @@
+{
+  "name": "@ecode/compaction-core",
+  "version": "0.1.0",
+  "description": "Standalone deterministic context-compaction core: pure functions with injectable strategies, tool-name matching, and path/hash extraction. Harness-agnostic.",
+  "keywords": [
+    "context-compaction",
+    "llm-agent",
+    "coding-agent"
+  ],
+  "license": "MIT",
+  "author": "lesPrivilege <lesprivilege@gmail.com>",
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
+  }
+}
