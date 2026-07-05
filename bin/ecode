@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# ecode — pi coding agent + deterministic-compaction extension, isolated profile.
+# Vanilla `pi` (~/.pi/) stays untouched; ecode uses its own agent dir so daily
+# dogfooding (treatment) and plain pi (control) can coexist.
+set -euo pipefail
+
+ECODE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CLI="$ECODE_ROOT/pi/packages/coding-agent/dist/cli.js"
+AGENT_DIR="$ECODE_ROOT/.ecode-agent"
+
+if [[ ! -f "$CLI" ]]; then
+  echo "ecode: pi CLI not built. Run: (cd \"$ECODE_ROOT/pi\" && npm install && npm run build)" >&2
+  exit 1
+fi
+
+# First-run scaffold: isolated agent dir with the extension linked in.
+if [[ ! -d "$AGENT_DIR/extensions" ]]; then
+  mkdir -p "$AGENT_DIR/extensions"
+  ln -sfn "$ECODE_ROOT/extensions/deterministic-compaction" \
+    "$AGENT_DIR/extensions/deterministic-compaction"
+fi
+
+# Recommended defaults (override per-invocation via real env).
+export PI_CODING_AGENT_DIR="$AGENT_DIR"
+export ECODE_COMPACT_AFTER_INPUT_TOKENS="${ECODE_COMPACT_AFTER_INPUT_TOKENS:-32000}"
+export ECODE_KEEP_RECENT_ASSISTANT_MSGS="${ECODE_KEEP_RECENT_ASSISTANT_MSGS:-3}"
+
+exec node "$CLI" "$@"
