@@ -198,7 +198,13 @@ async function run(args: Args): Promise<void> {
 	// Extension factory: register provider, install the arm's real hook(s), and
 	// ALWAYS install the observer hook (records metrics; never mutates payload).
 	const factory = (pi: ExtensionAPI) => {
-		pi.registerProvider(provider.providerName, provider.config);
+		// Only register providers pi does not ship natively. The mock and the generic
+		// openai-compat provider need registration (register: true); DeepSeek is a
+		// pi built-in (register: false) and registering it would REPLACE its built-in
+		// models, so we leave the stock ModelRegistry to resolve deepseek/* directly.
+		if (provider.register) {
+			pi.registerProvider(provider.providerName, provider.config);
+		}
 
 		// Observer FIRST — pi chains context handlers in registration order
 		// (runner.ts emitContext), so registering the observer before the seam-A
@@ -244,7 +250,14 @@ async function run(args: Args): Promise<void> {
 
 	const sessionManager = SessionManager.create(tempDir);
 	const authStorage = AuthStorage.create(join(agentDir, "auth.json"));
-	authStorage.setRuntimeApiKey(provider.providerName, "mock-key");
+	// Inject a runtime key ONLY when the provider asks for one (the mock's non-secret
+	// "mock-key"). Real providers leave provider.runtimeApiKey undefined: DeepSeek
+	// resolves DEEPSEEK_API_KEY through pi's native auth and the openai-compat branch
+	// resolves its key from the configured "$ENV_VAR" — injecting here would SHADOW
+	// the real key. No real key material ever flows through this call.
+	if (provider.runtimeApiKey !== undefined) {
+		authStorage.setRuntimeApiKey(provider.providerName, provider.runtimeApiKey);
+	}
 	const modelRegistry = ModelRegistry.create(authStorage, agentDir);
 
 	const resourceLoader = new DefaultResourceLoader({
