@@ -58,6 +58,10 @@ support them.
 - Promote artifact review into a standard report section, not an appendix.
 - Add golden fixtures for the known failure classes: information gap, summary
   defect, loop pathology, and confirmation spiral.
+  (FP-1 landed 2026-07-08: `experiments/lib/fingerprints.ts` + golden fixtures
+  from real runs; design & capability matrix in
+  `docs/fingerprint-detectors-design-2026-07-08.md`. (a)/(d) full, (c) proxy,
+  (b) signal-absent pending schema increment. 参数定档待人裁，结果暂不入报告。)
 
 ### H2 — Dispatch Policy
 
@@ -153,6 +157,9 @@ support them.
     evidence links.
 18. `SYMBOL-SUMMARY`: deterministic TypeScript export/function summary for read
     projections.
+19. `CHORES-2026-07-08`: 环境卫生三件——docs/scratch 过时生成器清除、论文预览
+    确定性编译脚本、pi/ 围栏内未追踪杂物迁出。packet 自含，可发弱模型：
+    `docs/chores-2026-07-08.md`。
 
 ## Stop Conditions
 
