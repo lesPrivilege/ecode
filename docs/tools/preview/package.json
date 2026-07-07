@@ -1,0 +1,13 @@
+{
+  "name": "ecode-paper-preview-builder",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Deterministic compiler: docs/paper-context-economy-2026-07-07(.md|_zh.md) -> docs/index.html. The only generation path for the paper preview page; do not hand-edit docs/index.html.",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "dependencies": {
+    "marked": "18.0.5"
+  }
+}
