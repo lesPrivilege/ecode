@@ -32,7 +32,8 @@ cache 按字节匹配）与文件系统持久性（hash 溯源）上的机制；
 本身变成信号的观测面——失效按行为指纹分类（信息缺口 / 摘要缺陷 /
 循环病理 / 确证螺旋），每类在 telemetry 里机械可判。对模型方，这套
 分类学是现成的训练信号与能力等高线；对下游，它是选型判据。
-理论骨架见 working paper《外化天花板与跨层 cache 契约》。
+理论骨架见 working paper《外化天花板与跨层 cache 契约》；对外预览：
+https://lesprivilege.github.io/ecode/
 
 ## 已实证（受控数据，真实 DeepSeek API）
 
