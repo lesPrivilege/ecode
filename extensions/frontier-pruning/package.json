@@ -1,0 +1,16 @@
+{
+  "name": "@ecode/frontier-pruning",
+  "version": "0.1.0",
+  "description": "pi context-hook extension wiring @ecode/context-pruning's clearToolUses (Anthropic clear_tool_uses_20250919 replica) into the send-time projection seam. Loaded from source via jiti; no build step.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
+  }
+}

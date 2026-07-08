@@ -1,0 +1,33 @@
+{
+  "name": "@ecode/context-pruning",
+  "version": "0.1.0",
+  "description": "Deterministic client-side replica of Anthropic's clear_tool_uses_20250919 context editing: pure tool-result pruning with injectable token estimator. Harness-agnostic.",
+  "keywords": [
+    "context-pruning",
+    "context-editing",
+    "llm-agent",
+    "coding-agent"
+  ],
+  "license": "MIT",
+  "author": "lesPrivilege <lesprivilege@gmail.com>",
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "echo 'build disabled: tsc rootDir hazard writes into ../compaction-core/src — see arch-frontier-pruning-design §9 (KNOWN-ISSUE G4a-5)' && exit 1",
+    "build:unsafe-disabled": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
+  }
+}

@@ -7,6 +7,13 @@ current model quirks and job-application window have aged out.
 
 ## North Star
 
+> Converged 2026-07-08 (see `program-context-pruning-2026-07-08.md`): ecode is
+> a systematic study of context pruning. Advanced harness-side and even
+> provider-side pruning mechanisms are replicated as thin-harness extensions
+> and measured on one common ledger — cache price, reproducibility class,
+> failure fingerprint. The earlier phrasing below still holds; the program
+> charter is its sharpened form.
+
 ecode should become a small, durable harness for measuring where context should
 be handled by rules, by models, or by provider infrastructure.
 

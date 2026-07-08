@@ -17,13 +17,16 @@ signals when available, and are the source for the R2 reports under
 node plan.ts --arms A,B,C,D --scenario refactor [--compact-after N] [--keep-recent N] [--sweep 16000,64000] [--out-dir results]
 
 # drive ONE arm against ONE scenario in-process, emit a JSONL metrics file:
-node --import ./lib/register.mjs run.ts --arm C --scenario refactor --out results/refactor-C.jsonl \
+node --experimental-transform-types --import ./lib/register.mjs run.ts --arm C --scenario refactor --out results/refactor-C.jsonl \
      [--compact-after 32000] [--keep-recent 3] [--provider mock|deepseek|openai-compat] [--seam-b]
 
 # read N JSONL files, compute deltas vs baseline, apply the invalid/suspicious gates:
-node --import ./lib/register.mjs compare.ts --in a.jsonl --in b.jsonl ... --baseline A [--json]
+node --experimental-transform-types --import ./lib/register.mjs compare.ts --in a.jsonl --in b.jsonl ... --baseline A [--json]
 ```
 
+`--experimental-transform-types` is required (not just strip-types): the DC
+extension's `tuning.ts` uses TS parameter properties, which strip-only mode
+cannot parse (doc fix 2026-07-08; the requirement itself predates G4c).
 `run.ts` and `compare.ts` are launched with `--import ./lib/register.mjs`, a
 native Node ESM resolve hook (`lib/loader.mjs`) that aliases the `@earendil-works/*`
 pi packages to their workspace `src` (pi is consumed from source, never built) and
@@ -67,6 +70,8 @@ consume it. Files start with `#` comment lines (ignored by the reader).
 | `mechanism.placebo_tail_target_tokens` | C+PL local placebo target, null outside placebo arms |
 | `mechanism.extension_flags.compact_nudge_tail` | C+N fixed short nudge tail flag |
 | `mechanism.ws_declare_nudge` | WS-2.5 measurement mode (`off` or `every-turn`) |
+| `mechanism.trc_installed` | G4c: frontier-pruning's own `context` hook installed (TRC, arm T) |
+| `mechanism.trc_config` | TRC's effective config when `trc_installed` (`trigger_tokens`, `keep`, `clear_at_least`, `exclude_tools`, `clear_tool_inputs`, `preserve_error_results`); `null` otherwise |
 | `started_at` | ISO timestamp |
 | `data_kind` | `"synthetic-smoke-fixture"` for registry fixtures; real packet runs are tagged as real workload data |
 
@@ -83,6 +88,8 @@ consume it. Files start with `#` comment lines (ignored by the reader).
 | `read_calls` | `read` tool calls this turn |
 | `re_reads` | read calls this turn targeting a path already read earlier in the run |
 | `compacted_path_re_reads` | read calls this turn targeting a path already compacted earlier |
+| `cleared_path_re_reads` | G4c: read calls this turn targeting a path already cleared by TRC earlier (isomorphic to `compacted_path_re_reads`, kept side-by-side, never merged into it) |
+| `trc` | G4c: TRC's per-turn projection report — `{applied, clearedToolUses, clearedInputTokensEst, gateReading}` (Est = estimator units, chars/4, not a real provider token count); `null` when TRC is not installed for this arm |
 | `projected` | seam-A projected (compacted) this turn's outgoing payload |
 | `cache_read_tokens` | `usage.cacheRead` when the provider gives a signal, else **`null`** (mock) |
 | `tail_blocks` | OBS-TAIL evidence blocks injected or substituted on this turn; each block has `source`, `line_count`, and `content_hash` |
@@ -113,6 +120,11 @@ summariser's own tokens for arm B), `total_tool_calls`, `total_read_calls`,
 signal), `total_reasoning_tokens` (null when no turn had a signal),
 `cache_signal_present`, `completion`, `data_kind`.
 
+G4c adds (isomorphic to the `compacted_path_*` fields above, arm T only —
+0 on any arm where TRC is not installed): `cleared_path_count` (distinct
+paths TRC cleared at least once), `total_cleared_path_re_reads` (reads
+targeting an already-TRC-cleared path).
+
 ## Metric formulas (exact)
 
 - **re_read_count**: a `read` whose target path (the `path` argument, exact string,
@@ -127,6 +139,17 @@ signal), `total_reasoning_tokens` (null when no turn had a signal),
   reads — the always-defined base, comparable across arms with different read
   volumes. `null` when there are zero reads. This is the metric that catches
   taucode's documented false-savings case (tokens down while churn up).
+- **cleared_paths** (G4c): the set of `read`-tool paths whose paired result TRC
+  actually cleared (content replaced with the placeholder) at least once during
+  the run — isomorphic to `compacted_paths`, tracked separately. A path whose
+  `clearToolInputs` ALSO wiped the toolCall's `path` argument (path no longer
+  observable in the outgoing transcript, not just its content) is excluded from
+  this set: that is a structurally stronger failure mode than "content cleared,
+  path still visible", so conflating the two would corrupt the isomorphism.
+- **cleared_path_re_reads**: count of `read` calls, at any later turn, whose path
+  is in `cleared_paths` — isomorphic to `compacted_path_re_reads`. Consumed by
+  the FP-1 (a) detector at the SAME entry point as `compacted_path_re_reads`,
+  side-by-side, never merged into one blended count (design §7).
 - **cache**: `usage.cacheRead` verbatim when present; explicit **`null`** when the
   provider gives no signal (the mock). `null` = "no signal", `0` = "confirmed no
   cache hit" — kept distinct (g0-survey Item 5).

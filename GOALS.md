@@ -418,6 +418,38 @@ C 对 A <10% 且 re-read 率不降 → 归档阴性。
 
 ---
 
+> **程序收束（2026-07-08）**：G4 起的批次隶属「context 剪裁系统学」
+> 纲领——frontier harness/provider 侧机制复刻为 thin-harness
+> extensions，三列账本统一测量。机制全录 × 可行性矩阵、统一管线、
+> 批次规划（B2=G5 thinking clearing，前置核证先行）见
+> `docs/program-context-pruning-2026-07-08.md`。
+
+## G4 · Frontier Pruning Replica — TRC（2026-07-08 立项）
+
+**判权已裁**（2026-07-08）：交付形态 = 设计包 + packets；首批机制 =
+tool result clearing 单项；架构 = `packages/context-pruning/`（纯函数）
++ `extensions/frontier-pruning/`（pi adapter）。
+
+设计：`docs/arch-frontier-pruning-design-2026-07-08.md`（含官方规格
+核证、Rulings R1-R10、分歧表 D1-D8；D4/D5 已于同日二轮取证后裁定，
+LangChain 复刻先例对照与 PROBE-TRC 实证探针见其 §8.1/§8.2）。packets：
+`docs/g4-frontier-pruning-packets-2026-07-08.md`（G4a 核心包 → G4b
+adapter+冒烟 → G4c 遥测+指纹接线）。
+
+要点：门控变量与被控动作解耦（发现 1 防复发，显式取代 G1b 修正 #2
+的估计器禁令）；`clear_at_least` 为头号实验变量；与 C-v1 臂正交、
+不碰 SWEEP-R2 冻结；EXP-TRC-* 真 run 排在 SWEEP-R2 与 E1×C'' 之后，
+逐项归人裁。完成定义 = G4a-c 落版且 `pi/` 零 diff。
+
+> **状态（2026-07-08，Fable 验收）：G4 完成**。G4a（23 用例 + 独立
+> 冒烟 7/7）、G4b+G4b-R（31 用例 + 独立冒烟 8/8 + 真 loop JSONL
+> 双向校验）、G4c（74+31 用例 + Fable 沙箱独立端到端 T 臂 fixture
+> run）均落版验收；`pi/` 全程零 diff。三个执行 packet 共产出 15 个
+> 存疑点，逐条裁定入设计文档（D9-D11、KNOWN-ISSUE G4a-5、EXP-TRC-3
+> 前置债）。按 2026-07-08 判权裁定，对外口径切换条件已达成。
+
+---
+
 ### 给分发者的备注
 
 - G0 与 G1a 可同时开两个 agent；G1b 必须等两者 merge。

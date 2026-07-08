@@ -132,3 +132,36 @@ view-based 种子的核心主张(**模型在 call-time 自述留存意图**,
 harness 保留裁量)未见先例,adjacent art 存在但声明主体不同。
 种子立项时 prior-art 节按此写:站在 tool-result clearing 的
 延长线上,新增的是声明权移交与校准可测。
+
+---
+
+## 增补（2026-07-08）：From Context Pruning Taxonomy to Compaction Economics
+
+来源：frontier「context 修剪」机制专项调研（官方文档 + 源码 + 社区
+逆向，逐条带引用；社区逆向类须按事实等级标注）。结论：公开生态列出的
+不是一种机制而是层级菜单，真正的区分维度是 **cache 形状 × 可复现性 ×
+失效指纹**——三列全部缺席于通用分类学。压缩表：
+
+| 形态 | 实例 | cache 形状 | 可复现性 |
+| --- | --- | --- | --- |
+| LLM 全量摘要替换 | Claude server compaction（`compact_20260112`）、Claude Code `/compact`、Codex 本地 compact | summary 新写，常破前缀 | 低-中 |
+| 远端 opaque compact window | OpenAI `/responses/compact`、Codex remote compact | endpoint 返回 canonical window | 低（encrypted item 不可审计） |
+| send-time projection / collapse | Claude Code context collapse；本 repo seam-A | 原历史保留，投影字节稳定可重建 cache | 中-高 |
+| tool result clearing | Anthropic `clear_tool_uses_20250919`、Claude Code microcompact | 清除点破 cache；`clear_at_least` 显式定价 | 高（无状态纯函数同构） |
+| thinking clearing | Anthropic `clear_thinking_20251015` | keep all 保 cache，clear 破点后 | 高 |
+| subagent 隔离 | Claude Code subagent research | 父前缀不吃大读入 | 高 |
+| 初始上下文重注入 | Claude Code CLAUDE.md survival table、Codex initial context injection | 重注入位置决定前缀稳定性 | 高 |
+| provider/model 分叉 compact | Codex remote/local 双路径 | 远端依赖 endpoint 能力 | 中（failure 样本多） |
+
+要点三条：① Anthropic 已把 cache 断裂写进参数面（`clear_at_least`
+官方明文「worth breaking your prompt cache」）——frontier 在收敛向
+本 repo 的记账框架，但无人给参数画实测曲线；② 触发伪代码
+`if tokens_used > threshold` 的工程内容在「tokens_used 在哪个对象上
+测量」——Codex auto-compact 的门控变量对齐问题与本 repo 发现 1
+（门控自污染）同源；③ 「谁生成摘要」是账本分叉处不是实现细节：
+LLM 摘要付推理费且不可复现，确定性投影零边际——R2 终判压在这条线上。
+
+本 repo 的消费路径：G4 系列（`arch-frontier-pruning-design-2026-07-08.md`）
+把表中「tool result clearing」行复刻为客户端确定性纯函数，三列账本
+第一次覆盖非原生机制；后续批次候选 = thinking clearing、cache-aware
+pinning、初始上下文重注入。

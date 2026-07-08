@@ -65,6 +65,14 @@ interface TurnView {
 	readCalls: number;
 	reReads: number;
 	cpReReads: number;
+	/**
+	 * G4c: read calls this turn targeting a path TRC cleared earlier — the
+	 * isomorphic sibling of cpReReads, mirroring cleared_path_re_reads /
+	 * compacted_path_re_reads (see metrics.ts). Kept as its own field, not
+	 * folded into cpReReads: the two mechanisms' semantics stay side-by-side,
+	 * never merged (design §7).
+	 */
+	clearedPathReReads: number;
 	cacheRead: number | null;
 	reasoning: number | null;
 	failedEditFieldsPresent: boolean;
@@ -112,6 +120,7 @@ function extractTurns(rows: Row[]): TurnView[] {
 		readCalls: num(r, ["read_calls"]),
 		reReads: num(r, ["re_reads", "repeat_read_signals"]),
 		cpReReads: num(r, ["compacted_path_re_reads", "read_after_compacted_signals"]),
+		clearedPathReReads: num(r, ["cleared_path_re_reads"]),
 		cacheRead: numOrNull(r, "cache_read_tokens"),
 		reasoning: numOrNull(r, "reasoning_tokens"),
 		failedEditFieldsPresent: "failed_edit_calls" in r || "failed_edits_on_compacted_paths" in r,
@@ -125,16 +134,31 @@ function result(cls: FingerprintResult["cls"], name: string, over: Partial<Finge
 
 const NO_TURNS_REASON = "no turn rows (degenerate run)";
 
-/** (a) information-gap: the model re-read paths whose views had been compacted away. */
+/**
+ * (a) information-gap: the model re-read paths whose views had been removed
+ * from context — either compacted away (DC) or cleared away (TRC, G4c). Same
+ * entry point for both mechanisms (they produce the same phenomenological
+ * fingerprint: a removal, then a re-read of the removed path); the two
+ * signals are kept side-by-side in reasons/evidence, never merged into one
+ * blended count (design §7's "同一入口并列，不合并语义"). On any file that
+ * predates cleared_path_re_reads (or where TRC never applied), clearedTotal
+ * is 0 and this reduces byte-for-byte to the original compacted-path-only
+ * output — a pre-G4c golden fixture assertion is unaffected by this change.
+ */
 function detectInformationGap(turns: TurnView[]): FingerprintResult {
 	if (turns.length === 0) return result("a", "information-gap", { reasons: [NO_TURNS_REASON] });
 	const gapTurns = turns.filter((t) => t.cpReReads > 0).map((t) => t.turn);
 	const total = turns.reduce((a, t) => a + t.cpReReads, 0);
-	const triggered = total > 0;
+	const clearedGapTurns = turns.filter((t) => t.clearedPathReReads > 0).map((t) => t.turn);
+	const clearedTotal = turns.reduce((a, t) => a + t.clearedPathReReads, 0);
+	const triggered = total > 0 || clearedTotal > 0;
+	const reasons: string[] = [];
+	if (total > 0) reasons.push(`compacted_path_re_reads=${total} across ${gapTurns.length} turns`);
+	if (clearedTotal > 0) reasons.push(`cleared_path_re_reads=${clearedTotal} across ${clearedGapTurns.length} turns`);
 	return result("a", "information-gap", {
 		triggered,
-		reasons: triggered ? [`compacted_path_re_reads=${total} across ${gapTurns.length} turns`] : [],
-		evidence: { totalCompactedPathReReads: total, gapTurns },
+		reasons,
+		evidence: { totalCompactedPathReReads: total, gapTurns, totalClearedPathReReads: clearedTotal, clearedGapTurns },
 	});
 }
 
@@ -252,7 +276,12 @@ export function fingerprintFile(path: string, params: FingerprintParams = FINGER
 	let mechanismEngaged: boolean | null = null;
 	if (meta && meta.mechanism && typeof meta.mechanism === "object") {
 		const m = meta.mechanism as Row;
-		mechanismEngaged = m.native_compaction_enabled === true || m.seam_a_installed === true;
+		// G4c: trc_installed (arm T) is a THIRD, independent mechanism family —
+		// it engages with native_compaction_enabled and seam_a_installed both
+		// false, so without this check arm T would be misread as a vacuous
+		// baseline (D8-class error the (d) detector's vacuousBaseline annotation
+		// exists specifically to flag).
+		mechanismEngaged = m.native_compaction_enabled === true || m.seam_a_installed === true || m.trc_installed === true;
 	}
 
 	return {

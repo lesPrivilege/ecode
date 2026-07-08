@@ -103,6 +103,17 @@ export interface MetaRow {
 		placebo_tail_target_tokens?: number | null;
 		/** WS-2.5 measurement nudge mode; must stay off in ordinary experiment arms. */
 		ws_declare_nudge?: "off" | "every-turn";
+		/** G4c: frontier-pruning's own `context` hook installed (TRC, arm T). */
+		trc_installed?: boolean;
+		/** TRC config in effect when trc_installed; absent/null when TRC is not installed. */
+		trc_config?: {
+			trigger_tokens: number;
+			keep: number;
+			clear_at_least: number | null;
+			exclude_tools: string[] | null;
+			clear_tool_inputs: boolean | string[];
+			preserve_error_results: boolean;
+		} | null;
 	};
 	started_at: string;
 	/** Marker string so smoke fixtures are never mistaken for real G2 workloads. */
@@ -137,6 +148,25 @@ export interface TurnRow {
 	re_reads: number;
 	/** read calls this turn targeting a path already compacted earlier. */
 	compacted_path_re_reads: number;
+	/**
+	 * read calls this turn targeting a path already cleared by TRC earlier
+	 * (G4c — isomorphic to compacted_path_re_reads, same entry point for the
+	 * FP-1 (a) detector, semantics kept side-by-side, never merged into it).
+	 */
+	cleared_path_re_reads: number;
+	/**
+	 * G4c: TRC's (frontier-pruning) per-turn projection report, re-derived by
+	 * the observer the same way seam-A's input_tokens/projected are derived —
+	 * never null's sibling fields half-populated. `null` when TRC is not
+	 * installed for this arm. `clearedInputTokensEst` is the ESTIMATOR's unit
+	 * (chars/4, R3), not a real provider token count.
+	 */
+	trc: {
+		applied: boolean;
+		clearedToolUses: number;
+		clearedInputTokensEst: number;
+		gateReading: number;
+	} | null;
 	/** Whether seam-A projected (compacted) THIS turn's outgoing payload. */
 	projected: boolean;
 	/** cacheRead tokens for this turn, or null when the provider gave no signal. */
@@ -173,6 +203,10 @@ export interface SummaryRow {
 	total_compacted_path_re_reads: number;
 	/** compacted_path_re_reads / total_read_calls, or null when no reads. */
 	compacted_path_re_read_rate: number | null;
+	/** G4c: number of distinct paths TRC cleared at least once (isomorphic to compacted_path_count). */
+	cleared_path_count: number;
+	/** G4c: reads targeting an already-TRC-cleared path (isomorphic to total_compacted_path_re_reads). */
+	total_cleared_path_re_reads: number;
 	/** Turns on which seam-A projected the payload. */
 	projected_turn_count: number;
 	/** Whether native pi compaction actually fired (arm A/B signal). */
@@ -263,9 +297,11 @@ export class RunMetrics {
 	private turns: TurnRow[] = [];
 	private seenReadPaths = new Set<string>();
 	private compactedPaths = new Set<string>();
+	private clearedPaths = new Set<string>();
 	private totalReadCalls = 0;
 	private totalReReads = 0;
 	private totalCompactedPathReReads = 0;
+	private totalClearedPathReReads = 0;
 	private cacheSignalPresent = false;
 	private cacheTotal = 0;
 	private reasoningSignalPresent = false;
@@ -282,6 +318,7 @@ export class RunMetrics {
 	// per-turn scratch, set by onOutgoingTokens, consumed by recordAssistant.
 	private pendingInputTokens = 0;
 	private pendingProjected = false;
+	private pendingTrc: TurnRow["trc"] = null;
 	private tailEvidenceByTurn = new Map<number, TailEvidence>();
 
 	/**
@@ -302,6 +339,24 @@ export class RunMetrics {
 		noteProjected(compactedReadPaths: string[]): void {
 			this.pendingProjected = true;
 			for (const p of compactedReadPaths) this.compactedPaths.add(p);
+		}
+
+		/**
+		 * G4c isomorphic sibling of noteProjected, for TRC (arm T). Called EVERY
+		 * turn TRC's hook is installed (not just when it actually clears — the
+		 * report's own `applied` flag carries that), so `trc` is populated
+		 * (never left half-null) for every turn on this arm. Registers only the
+		 * "path-alive" cleared paths (clearToolInputs did not also wipe the path
+		 * argument) into the re-read-tracking set: a path whose identity is no
+		 * longer observable in the transcript is a structurally different,
+		 * stronger failure mode than "content cleared but path still visible" —
+		 * conflating the two would corrupt the compacted-path isomorphism this
+		 * counter mirrors.
+		 */
+		noteTrc(report: NonNullable<TurnRow["trc"]>, clearedAlivePaths: string[]): void {
+			this.pendingTrc = report;
+			if (report.applied) this.pendingProjected = true;
+			for (const p of clearedAlivePaths) this.clearedPaths.add(p);
 		}
 
 		noteTailEvidence(evidence: TailEvidence): void {
@@ -351,12 +406,17 @@ export class RunMetrics {
 		const reads = readCallsIn(message);
 		let turnReReads = 0;
 		let turnCompactedPathReReads = 0;
+		let turnClearedPathReReads = 0;
 		for (const r of reads) {
 			this.totalReadCalls++;
 			const key = r.path ?? "<unknown>";
 			if (this.compactedPaths.has(key)) {
 				turnCompactedPathReReads++;
 				this.totalCompactedPathReReads++;
+			}
+			if (this.clearedPaths.has(key)) {
+				turnClearedPathReReads++;
+				this.totalClearedPathReReads++;
 			}
 			if (this.seenReadPaths.has(key)) {
 				turnReReads++;
@@ -395,6 +455,8 @@ export class RunMetrics {
 			read_calls: reads.length,
 			re_reads: turnReReads,
 			compacted_path_re_reads: turnCompactedPathReReads,
+			cleared_path_re_reads: turnClearedPathReReads,
+			trc: this.pendingTrc,
 			projected: this.pendingProjected,
 			cache_read_tokens: null,
 			tail_blocks: tailEvidence?.tail_blocks ?? [],
@@ -406,6 +468,7 @@ export class RunMetrics {
 		// reset per-turn scratch.
 		this.pendingInputTokens = 0;
 		this.pendingProjected = false;
+		this.pendingTrc = null;
 	}
 
 	/**
@@ -467,6 +530,8 @@ export class RunMetrics {
 			compacted_path_count: this.compactedPaths.size,
 			total_compacted_path_re_reads: this.totalCompactedPathReReads,
 			compacted_path_re_read_rate: rate,
+			cleared_path_count: this.clearedPaths.size,
+			total_cleared_path_re_reads: this.totalClearedPathReReads,
 			projected_turn_count: projectedTurns,
 			native_compactions_observed: this.nativeCompactions,
 			summarizer_calls: this.summarizerCalls,

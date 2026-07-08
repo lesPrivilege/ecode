@@ -32,7 +32,7 @@
  * factory. That keeps the mock↔real swap a config change (G2), not a code change.
  */
 
-export type ArmId = "A" | "B" | "C" | "D";
+export type ArmId = "A" | "B" | "C" | "D" | "T";
 export type ArmSpecId = ArmId | "C-SB" | "C+PL" | "C+N" | "C'''-capture";
 
 export interface ExtensionFlagSet {
@@ -53,6 +53,12 @@ export interface ArmDefinition {
 	seamAInstalled: boolean;
 	/** Install G1b's seam-B `session_before_compact` checkpoint. */
 	seamBInstalled: boolean;
+	/**
+	 * G4c: install the frontier-pruning extension's `context` hook (TRC —
+	 * clear_tool_uses_20250919 replica) instead of G1b's seam-A. Optional so
+	 * A/B/C/D's shape is unchanged; only arm T sets this.
+	 */
+	trcInstalled?: boolean;
 }
 
 export interface ArmSpec {
@@ -98,12 +104,30 @@ export const ARMS: Record<ArmId, ArmDefinition> = {
 		seamAInstalled: true,
 		seamBInstalled: true,
 	},
+	T: {
+		id: "T",
+		// G4c: TRC standalone — native compaction off, G1b's seam-A/seam-B both
+		// OFF (mutually exclusive with C/D: this arm isolates the
+		// frontier-pruning mechanism, not G1b's), frontier-pruning's own
+		// `context` hook installed instead (trcInstalled). Mirrors arm C's
+		// isolation discipline (native off so no other mechanism confounds
+		// the comparison) but for a structurally different clearing mechanism.
+		label: "TRC standalone (frontier-pruning hook only)",
+		nativeCompactionEnabled: false,
+		seamAInstalled: false,
+		seamBInstalled: false,
+		trcInstalled: true,
+	},
 };
 
+// Deliberately NOT including "T": ALL_ARMS is the default A/B/C/D sweep set
+// used by callers that iterate "the 4 arms"; T is explicitly opt-in via
+// `--arm T`, never swept by default. Existing A/B/C/D behavior and defaults
+// are unchanged by this file.
 export const ALL_ARMS: ArmId[] = ["A", "B", "C", "D"];
 
 export function isArmId(x: string): x is ArmId {
-	return x === "A" || x === "B" || x === "C" || x === "D";
+	return x === "A" || x === "B" || x === "C" || x === "D" || x === "T";
 }
 
 const NO_FLAGS: ExtensionFlagSet = {
@@ -120,6 +144,7 @@ export const ARM_SPECS: Record<ArmSpecId, ArmSpec> = {
 	B: { id: "B", label: ARMS.B.label, base: ARMS.B, flags: NO_FLAGS },
 	C: { id: "C", label: ARMS.C.label, base: ARMS.C, flags: NO_FLAGS },
 	D: { id: "D", label: ARMS.D.label, base: ARMS.D, flags: NO_FLAGS },
+	T: { id: "T", label: ARMS.T.label, base: ARMS.T, flags: NO_FLAGS },
 	"C-SB": {
 		id: "C-SB",
 		label: "seam-A hook + sideband summaries + WS policy",

@@ -56,7 +56,17 @@ import { runAcceptance, type AcceptanceRow } from "./lib/acceptance.js";
 import { exportRunArtifacts, type ArtifactManifest } from "./lib/artifacts.js";
 import { copyWorkspaceFrom } from "./lib/workspace.js";
 import { createSidebandSummarizer, resolveProvider, DEFAULT_PROVIDER } from "./lib/provider.js";
-import { RunMetrics, type MetaRow, type MetricRow } from "./lib/metrics.js";
+import { RunMetrics, type MetaRow, type MetricRow, type TurnRow } from "./lib/metrics.js";
+// G4c — TRC (frontier-pruning) arm T. Relative source-path import, not
+// package-name resolution (repo-wide discipline for pi-adjacent extensions —
+// see extensions/frontier-pruning/src/context-pruning.ts). `projectContext`
+// is aliased: this file already imports DC's OWN `projectContext` above from
+// compaction-core-adapter.js, and the two are unrelated pure functions with
+// the same name.
+import { default as frontierPruningExtension } from "../extensions/frontier-pruning/src/extension.js";
+import { projectContext as projectTrcContext } from "../extensions/frontier-pruning/src/projection.js";
+import { estimateTokensCharsDiv4 } from "../extensions/frontier-pruning/src/estimator.js";
+import { parseTrcFlags, type EnvLike } from "../extensions/frontier-pruning/src/flags.js";
 
 const SCHEMA_VERSION = 1;
 
@@ -81,6 +91,21 @@ interface Args {
 	packetsDoc?: string;
 	/** Override provider model context window; used by B-fixed preflight. */
 	contextWindow?: number;
+	/**
+	 * G4c — arm T (TRC) tuning. Meaningful only when `--arm T`; translated into
+	 * the ECODE_TRC_* env-var shape frontier-pruning's own (unmodified)
+	 * parseTrcFlags already reads, so the extension's flags surface is reused
+	 * verbatim rather than re-implemented here. All optional and OMITTED
+	 * (not defaulted here) when unset, so parseTrcFlags's own defaults apply
+	 * — a single source of truth for TRC's default trigger/keep/etc, not
+	 * duplicated magic numbers.
+	 */
+	trcTriggerTokens?: number;
+	trcKeep?: number;
+	trcClearAtLeast?: number;
+	trcExcludeTools?: string;
+	trcClearToolInputs?: string;
+	trcPreserveErrors: boolean;
 }
 
 function parseArgs(argv: string[]): Args {
@@ -99,6 +124,9 @@ function parseArgs(argv: string[]): Args {
 	}
 	const asNum = (v: string | boolean | undefined, d: number) =>
 		typeof v === "string" && Number.isFinite(Number(v)) ? Number(v) : d;
+	const asOptNum = (v: string | boolean | undefined): number | undefined =>
+		typeof v === "string" && Number.isFinite(Number(v)) ? Number(v) : undefined;
+	const asOptStr = (v: string | boolean | undefined): string | undefined => (typeof v === "string" ? v : undefined);
 	return {
 		arm: typeof flags.arm === "string" ? flags.arm : "C",
 		scenario: typeof flags.scenario === "string" ? flags.scenario : "refactor",
@@ -111,6 +139,13 @@ function parseArgs(argv: string[]): Args {
 		workspaceFrom: typeof flags["workspace-from"] === "string" ? flags["workspace-from"] : undefined,
 		packetsDoc: typeof flags["packets-doc"] === "string" ? flags["packets-doc"] : undefined,
 		contextWindow: asNum(flags["context-window"], Number.NaN),
+		// G4c — arm T tuning; each omitted unless explicitly passed (see Args doc).
+		trcTriggerTokens: asOptNum(flags["trc-trigger-tokens"]),
+		trcKeep: asOptNum(flags["trc-keep"]),
+		trcClearAtLeast: asOptNum(flags["trc-clear-at-least"]),
+		trcExcludeTools: asOptStr(flags["trc-exclude-tools"]),
+		trcClearToolInputs: asOptStr(flags["trc-clear-tool-inputs"]),
+		trcPreserveErrors: flags["trc-preserve-errors"] === true || flags["trc-preserve-errors"] === "true",
 	};
 }
 
@@ -164,6 +199,67 @@ function compactedReadPaths(messages: { role: string; meta?: Record<string, unkn
 	return paths;
 }
 
+// --- extract cleared read paths from a TRC projection outcome (G4c) -------
+
+/**
+ * Which `read` result paths did TRC clear this turn? Unlike DC's compaction,
+ * clearToolUses stamps no meta marker on what it touches (see
+ * extensions/frontier-pruning/src/projection.ts's header — that's exactly
+ * why this extension writes its own new inverse-mapper instead of reusing
+ * DC's adapter fromCore). Detection here uses the SAME identity-preservation
+ * contract that mapper relies on: an untouched pi AgentMessage comes back as
+ * the exact same object reference, so `before[i] !== after[i]` is a
+ * complete, marker-free "this changed" test at the pi message level too.
+ *
+ * `pathAlive=false` marks a pair whose `clearToolInputs` ALSO wiped the
+ * paired toolCall's `path` argument (arguments became `{}`) — the path's
+ * identity, not just its content, is no longer observable in the outgoing
+ * transcript. Callers should exclude those from the re-read-tracking set:
+ * conflating "content cleared, path still visible" with "path itself gone"
+ * would corrupt the compacted-path isomorphism cleared_path_re_reads mirrors.
+ */
+interface ClearedPathEntry {
+	toolCallId: string;
+	path: string | undefined;
+	pathAlive: boolean;
+}
+
+function clearedReadPaths(before: AgentMessage[], after: AgentMessage[]): ClearedPathEntry[] {
+	const callInfoById = new Map<string, { path: string | undefined; ownerIndex: number }>();
+	before.forEach((m, idx) => {
+		if (m.role !== "assistant") return;
+		for (const block of (m as AssistantMessage).content) {
+			if (block.type !== "toolCall" || block.name !== "read") continue;
+			const path = typeof block.arguments?.path === "string" ? (block.arguments.path as string) : undefined;
+			callInfoById.set(block.id, { path, ownerIndex: idx });
+		}
+	});
+
+	const entries: ClearedPathEntry[] = [];
+	for (let i = 0; i < before.length; i++) {
+		const b = before[i];
+		const a = after[i];
+		if (!b || !a || b === a) continue;
+		if (b.role !== "toolResult") continue;
+		const toolCallId = (b as { toolCallId?: string }).toolCallId;
+		if (!toolCallId) continue;
+		const info = callInfoById.get(toolCallId);
+		if (!info) continue; // not a paired "read" call (other tool, or orphan) — not tracked
+
+		let pathAlive = true;
+		const ownerBefore = before[info.ownerIndex] as AssistantMessage | undefined;
+		const ownerAfter = after[info.ownerIndex] as AssistantMessage | undefined;
+		if (ownerBefore && ownerAfter && ownerBefore !== ownerAfter) {
+			const afterCall = ownerAfter.content.find((c) => c.type === "toolCall" && c.id === toolCallId);
+			if (afterCall && afterCall.type === "toolCall" && Object.keys(afterCall.arguments ?? {}).length === 0) {
+				pathAlive = false;
+			}
+		}
+		entries.push({ toolCallId, path: info.path, pathAlive });
+	}
+	return entries;
+}
+
 // --- the run --------------------------------------------------------------
 
 async function run(args: Args): Promise<void> {
@@ -199,6 +295,27 @@ async function run(args: Args): Promise<void> {
 		compactAfterInputTokens: args.compactAfter,
 		compactionOptions: { keepRecentAssistantMessages: args.keepRecent },
 	};
+
+	// G4c — TRC (arm T) config, only meaningful when arm.trcInstalled. CLI
+	// --trc-* flags translate into the ECODE_TRC_* env-var shape
+	// frontier-pruning's own parseTrcFlags reads (single source of truth for
+	// TRC's defaults — see Args doc); ECODE_TRC is forced "1" so selecting
+	// `--arm T` alone is sufficient, mirroring how other arms don't need a
+	// redundant separate switch. Real process.env is the base so any
+	// ECODE_TRC_* var already exported by the caller still passes through.
+	const trcEnv: EnvLike | undefined = arm.trcInstalled
+		? {
+				...process.env,
+				ECODE_TRC: "1",
+				...(args.trcTriggerTokens !== undefined ? { ECODE_TRC_TRIGGER_TOKENS: String(args.trcTriggerTokens) } : {}),
+				...(args.trcKeep !== undefined ? { ECODE_TRC_KEEP: String(args.trcKeep) } : {}),
+				...(args.trcClearAtLeast !== undefined ? { ECODE_TRC_CLEAR_AT_LEAST: String(args.trcClearAtLeast) } : {}),
+				...(args.trcExcludeTools !== undefined ? { ECODE_TRC_EXCLUDE_TOOLS: args.trcExcludeTools } : {}),
+				...(args.trcClearToolInputs !== undefined ? { ECODE_TRC_CLEAR_TOOL_INPUTS: args.trcClearToolInputs } : {}),
+				ECODE_TRC_PRESERVE_ERRORS: args.trcPreserveErrors ? "1" : "0",
+			}
+		: undefined;
+	const trcFlags = trcEnv ? parseTrcFlags(trcEnv) : null;
 
 	// Working directory. Two mutually-exclusive construction paths:
 	//   (default) fresh empty tmpdir, then write scenario.seedFiles into it — the
@@ -267,12 +384,39 @@ async function run(args: Args): Promise<void> {
 				if (outcome.projected && outcome.compaction) {
 					metrics.noteProjected(compactedReadPaths(outcome.compaction.messages));
 				}
+			} else if (arm.trcInstalled && trcFlags) {
+				// G4c — same re-derivation discipline as the seam-A branch above, but
+				// through frontier-pruning's own (unmodified) projectContext/estimator
+				// (R3: TRC's gate reads its OWN injected chars/4 estimator, never pi's
+				// estimateContextTokens or any provider usage field). `trc` is
+				// populated EVERY turn TRC is installed, applied or not, so the field
+				// is never half-null (see TurnRow.trc doc in metrics.ts).
+				const trcOutcome = projectTrcContext(messages, trcFlags.config, { estimateTokens: estimateTokensCharsDiv4 });
+				metrics.onOutgoingTokens(estimatePayloadTokens(trcOutcome.messages));
+				const cleared = clearedReadPaths(messages, trcOutcome.messages);
+				const aliveClearedPaths = cleared.filter((e) => e.pathAlive && e.path !== undefined).map((e) => e.path!);
+				metrics.noteTrc(
+					{
+						applied: trcOutcome.applied,
+						clearedToolUses: trcOutcome.report.clearedToolUses,
+						clearedInputTokensEst: trcOutcome.report.clearedInputTokens,
+						gateReading: trcOutcome.report.gateReading,
+					},
+					aliveClearedPaths,
+				);
 			} else {
 				// No hook: the raw payload is what gets sent.
 				metrics.onOutgoingTokens(estimatePayloadTokens(messages));
 			}
 			return undefined; // observer never changes the payload
 		});
+
+		if (arm.trcInstalled && trcEnv) {
+			// The REAL hook: registered after the observer (same ordering discipline
+			// as seam-A below), actually performs the clearing that reaches the
+			// provider. frontier-pruning's own factory — zero copy, zero modification.
+			frontierPruningExtension(pi, trcEnv);
+		}
 
 		if (arm.seamAInstalled) {
 			installDeterministicCompaction(pi, {
@@ -405,6 +549,17 @@ async function run(args: Args): Promise<void> {
 			},
 			placebo_tail_target_tokens: extensionFlags.placeboTokenMatching ? 120 : null,
 			ws_declare_nudge: declareNudge,
+			trc_installed: arm.trcInstalled === true,
+			trc_config: trcFlags
+				? {
+						trigger_tokens: trcFlags.config.trigger.value,
+						keep: trcFlags.config.keep.value,
+						clear_at_least: trcFlags.config.clearAtLeast?.value ?? null,
+						exclude_tools: trcFlags.config.excludeTools ?? null,
+						clear_tool_inputs: trcFlags.config.clearToolInputs ?? false,
+						preserve_error_results: trcFlags.config.preserveErrorResults ?? false,
+					}
+				: null,
 		},
 		started_at: new Date().toISOString(),
 		data_kind: dataKind,
